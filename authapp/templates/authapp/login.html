@@ -1,0 +1,60 @@
+{% extends '_base.html' %}
+{% load widget_tweaks %}
+{% block title %}Login - {% endblock title %}
+{% block body %}
+<main class="login_page h-full relative">
+  <div class="absolute top-0 right-0 w-1/2 bg-gray-900 h-full text-white">
+    <div class="flex flex-col pt-16 justify-center">
+      <div class="mb-16 px-16 flex flex-col">
+        <span class="uppercase text-sm leading-tight mb-2">Welcome to </span>
+        <h1 class="text-4xl text-yellow-500 font-semibold">Noble Cosmetics Ltd</h1>
+      </div>
+      <div class="px-16 w-full">
+        <form class="login_form" action="{% url 'auth:login' %}" method="post">
+          {% csrf_token %}
+          <div class="border-b-2 mb-6 border-gray-900">
+            <span class="text-2xl font-light">Enter your credentials to login</span>
+          </div>
+          <div class="">
+            <div class="field-stacked">
+              <label for="username" class="">Username</label>
+              <div class="input">
+                <input type="text" style="padding:8px 10px; border-radius: 5px;font-size:16px;" name="username"
+                  id="username" placeholder="Enter Username" value="{{ username }}" {% if validations.username_error %}
+                  class="border-red-500" {% endif %} />
+                {% if validations.username_error %}
+                <ul class="errorlist text-red-600 text-xs">
+                  <li>{{ validations.username_error_message }}</li>
+                </ul>
+                {% endif %}
+              </div>
+            </div>
+            <div class="field-stacked ">
+              <label for="password" class="">Password</label>
+              <div class="input">
+                <input {% if validations.password_error %} class="border-red-500" {% endif %} type="password"
+                  style="padding: 8px 10px; border-radius: 5px; font-size:16px;" name="password" id="password"
+                  placeholder="Enter Password" />
+                {% if validations.password_error %}
+                <ul class="errorlist text-red-600 text-xs">
+                  <li>{{ validations.password_error_message }}</li>
+                </ul>
+                {% endif %}
+              </div>
+            </div>
+            {% if validations.form_has_error %}
+            <div class="flex items-center justify-center text-center space-x-2 form_error">
+              <p class="text-xs text-red-600">{{ validations.form_error_message }}</p>
+            </div>
+            {% endif %}
+
+
+          </div>
+          <input type="submit" value="Login"
+            class="w-1/2 px-2 py-2 rounded-md text-sm font-semibold uppercase bg-green-600 cursor-pointer hover:bg-green-700" />
+        </form>
+      </div>
+    </div>
+  </div>
+</main>
+{% endblock body %}

@@ -1,0 +1,37 @@
+{% load humanize %}
+<div class="flex flex-col space-y-4">
+  <h2 class="text-xl font-semibold border-b-2 border-gray-800">Products Summary</h2>
+  <div id="results"  class="grid grid-cols-3 grid-rows-2 gap-8">
+    <div class="flex flex-col px-8 py-6 space-y-5 text-center rounded-md bg-gradient-to-r from-blue-400 via-blue-500 to-blue-700">
+      <h2 class="text-sm font-semibold underline">Entire Stock</h2>
+      <div class="flex flex-col">
+        <p class="text-white">
+          <span class="text-3xl font-bold">{{ stock_sum|intcomma }}</span> Products
+        </p>
+        <small class="text-[10px] text-white">(In Stock)</small>
+      </div>
+    </div>
+    <div class="flex flex-col px-8 py-6 space-y-5 text-center rounded-md bg-gradient-to-r from-fuchsia-400 via-fuchsia-500 to-fuchsia-700">
+      <h2 class="text-sm font-semibold underline">Overall Amount Invested</h2>
+      <p class="text-white">
+        GHs<span class="text-3xl font-bold">{{ cash_invested|intcomma }}</span>
+      </p>
+    </div>
+    <div class="flex flex-col px-8 py-6 space-y-5 text-center rounded-md bg-gradient-to-r from-orange-400 via-orange-500 to-orange-700">
+      <h2 class="text-sm font-semibold underline">Expected orders</h2>
+      <div class="flex flex-col">
+        <p class="text-white">
+          GHs<span class="text-3xl font-bold">{{ after_orders|intcomma }}</span>
+        </p>
+      </div>
+    </div>
+    <div class="flex flex-col px-8 py-6 space-y-5 text-center rounded-md bg-gradient-to-r from-green-400 via-green-500 to-green-700">
+      <h2 class="text-sm font-semibold underline">Expected Profit</h2>
+      <div class="flex flex-col">
+        <p class="text-white">
+          GHs<span class="text-3xl font-bold">{{ profit|intcomma }}</span>
+        </p>
+      </div>
+    </div>
+  </div>
+</div>

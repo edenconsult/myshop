@@ -1,0 +1,46 @@
+{% load humanize %}
+<div class="flex flex-col col-span-2 px-3 py-2 space-y-2 border-2 border-gray-500 bg-gray-200/60">
+    <h3 class="px-2 py-0.5 font-semibold border-b-2 border-gray-500">Orders &mdash; [{{ date }}]</h3>
+        <table id="orders_products_table"
+            class="w-full text-[10px] text-left text-gray-500 border-collapse table-fixed dark:text-gray-400">
+            <thead class="text-xs text-gray-700 uppercase bg-gray-50 dark:bg-gray-700 dark:text-gray-400">
+                <tr class="flex">
+                    <th scope="col" class="w-12 px-3 py-2 text-center">S/No.</th>
+                    <th scope="col" class="w-24 px-3 py-2 text-center">Order Code</th>
+                    <th scope="col" class="flex-1 px-3 py-2 text-center">Total Amount</th>
+                    <th scope="col" class="flex-1 px-3 py-2 text-center">Time Created</th>
+                </tr>
+            </thead>
+            <tbody class="overflow-y-auto block h-[350px]" id="tbody">
+                {% for order in orders %}
+                <tr
+                    class="flex items-center bg-white border-b dark:bg-gray-800 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600">
+                    <td class="w-12 px-3 py-2 font-medium text-center text-gray-900 dark:text-white">{{ forloop.counter }}</td>
+                    <td class="w-24 px-3 py-2 font-medium text-center text-gray-900 dark:text-white">
+                        <a class="text-blue-600 cursor-pointer hover:underline" hx-swap="innerHTML"
+                            hx-target="#order_details"
+                            hx-get="{% url 'core:view-order' order.id forloop.counter %}">{{ order.code }}</a>
+                    </td>
+                    <td class="flex-1 px-3 py-2 text-center">GHs {{ order.overall_amount_paid }}</td>
+                    <td class="flex-1 px-3 py-2 text-center">{{ order.created|naturaltime }}</td>
+                </tr>
+                {% empty %}
+                <tr class="flex items-center w-full">
+                    <td class="flex-1 px-2 py-1 text-center"><span class="text-sm font-semibold text-red-600">NO ORDERS MADE BY {{  users }} ON THIS DATE {{ date }} </span></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+
+    <div class="flex items-center justify-between w-full px-3 py-4 bg-green-200 border-2 border-green-300">
+        <h3 class="font-semibold text-green-600">Total Sales: GHs {{ todays_total_orders|default:'0.00' }}</h3>
+        {% if orders|length > 0 %}
+        <div>
+            <a href="{% url 'core:print-todays-orders' date users %}"
+                class="text-[10px] text-white bg-gradient-to-r from-gray-500 via-gray-600 to-gray-700 hover:bg-gradient-to-br focus:ring-4 focus:outline-none focus:ring-gray-300 dark:focus:ring-gray-800 shadow-lg shadow-gray-500/50 dark:shadow-lg dark:shadow-gray-800/80 font-medium rounded-lg text-sm px-3 py-2 text-center mr-2 mb-2 ">
+                Download Report
+            </a>
+        </div>
+        {% endif %}
+    </div>
+</div>

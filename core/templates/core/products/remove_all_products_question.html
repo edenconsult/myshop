@@ -1,0 +1,33 @@
+<div class="flex flex-col space-y-6 border-2 border-red-500 px-3 py-1.5 bg-red-50">
+  <h2 class="text-sm font-semibold my-3 border-b-2 border-red-500">
+    Removing
+    {% if ids|length > 0 %}
+      Selected
+    {% else %}
+      All
+    {% endif %}
+    Products
+  </h2>
+  <h3 class="text-2xl font-light">This action is irreversible. Are you sure?</h3>
+  <div class="flex space-x-6 p-2">
+    <button @click="selectAll = false;ids=[]" {% if ids|length > 0 %} hx-post="{% url 'core:do-remove-products' %}" hx-vals="js:{ ids: JSON.parse(document.querySelector('#product_ids').textContent) }" {% else %} hx-get="{% url 'core:do-remove-products' %}" {% endif %}
+            hx-target="#new_products"
+            hx-swap="innerHTML"
+            class="text-white bg-gradient-to-r from-red-500 via-red-600 to-red-700 hover:bg-gradient-to-br focus:ring-4 focus:outline-none focus:ring-red-300 dark:focus:ring-red-800 shadow-lg shadow-red-500/50 dark:shadow-lg dark:shadow-red-800/80 font-medium rounded-lg text-sm px-5 py-2.5 text-center ">
+      Yes, Remove
+      {% if ids|length > 0 %}
+        Selected
+      {% else %}
+        All
+      {% endif %}
+      Products
+    </button>
+    <button hx-get="{% url 'core:get-product-action-buttons' %}"
+            hx-target="#new_products"
+            hx-swap="innerHTML"
+            class="text-white bg-gradient-to-r from-gray-500 via-gray-600 to-gray-700 hover:bg-gradient-to-br focus:ring-4 focus:outline-none focus:ring-gray-300 dark:focus:ring-gray-800 shadow-lg shadow-gray-500/50 dark:shadow-lg dark:shadow-gray-800/80 font-medium rounded-lg text-sm px-5 py-2.5 text-center">
+      No, Go Back
+    </button>
+  </div>
+</div>
+{{ ids|json_script:"product_ids" }}

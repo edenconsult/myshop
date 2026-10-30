@@ -1,0 +1,23 @@
+node_modules
+.venv
+venv
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+
+# IDE / editor
+.idea/
+.vscode/
+
+# Celery runtime state
+celerybeat-schedule.*
+
+# Generated static files
+productionfiles/
+staticfiles/
+static/CACHE/
+
+# Local docs & test files
+noble_cosmetics.ods
+*.pdf

@@ -1,0 +1,60 @@
+{% load static %}
+{% load humanize %}
+<html>
+  <head>
+    <link rel="stylesheet" href="http://127.0.0.1:9012/static/src/output.css">
+  </head>
+  <body>
+<div class="mx-24">
+  <div class="text-center border-b-2 border-gray-200">
+    
+    {% include "core/orders/prints/noble_cosmetics_header.html" %}
+                
+    <h3 class="font-semibold">Order Receipt</h3>
+    <h3 class="text-sm font-semibold">Receipt No.: <b>{{ order.code }}</b></h3>
+  </div>
+
+<div class="mt-12">
+  <table class="w-full text-xs border-2 border-gray-500">
+    <thead class="text-white bg-gray-600" style="background:#666;color:#fff">
+      <tr>
+        <th class="w-6 text-center">S/No.</th>
+        <th class="px-3 py-2 border border-gray-100" scope="col">Item Name</th>
+        <th class="px-3 py-2 border border-gray-100" scope="col">
+          Unit Price
+          <br>
+          (GHs)
+        </th>
+        <th class="px-3 py-2 border border-gray-100" scope="col">Qty Bought</th>
+        <th class="px-3 py-2 border border-gray-100" scope="col">
+          Total Price
+          <br>
+          (GHs)
+        </th>
+      </tr>
+    </thead>
+    <tbody id="tbody">
+      {% for order_item in order.orderitem_set.all %}
+        <tr>
+          <td class="text-center border border-gray-100">{{ forloop.counter }}</td>
+          <td class="px-3 py-2 border border-gray-100">{{ order_item.product }}</td>
+          <td class="px-3 py-2 border border-gray-100">{{ order_item.product.price }}</td>
+          <td class="px-3 py-2 border border-gray-100">{{ order_item.qty_bought }}</td>
+          <td class="px-3 py-2 border border-gray-100">{{ order_item.paid_amount }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="px-2 py-1 mt-6 bg-gray-100 border border-gray-500">
+  <div>
+    <h4>
+      Total Amount Paid:  <span>GHs {{ order.overall_amount_paid }}</span>
+    </h4>
+    <small style="color: #444;">Order Completed On: {{ order.created }}</small>
+  </div>
+</div>
+
+</body>
+</html>

@@ -1,0 +1,52 @@
+<nav class="pagination" aria-label="Table navigation">
+  <span class="text-sm font-normal text-gray-500 dark:text-gray-400">Showing <span class="font-semibold text-gray-900 dark:text-white">{{ starting_number }}-{{ stopping_number }}</span> of <span class="font-semibold text-gray-900 dark:text-white">{{ number_of_products }}</span></span>
+  <ul class="inline-flex items-center -space-x-px">
+    <li>
+      <a {% if page_obj.has_previous %} hx-get="{% url 'core:load-products' %}?l={{ limit }}&p={{ page_obj.previous_page_number }}" hx-target="#results" hx-vals="js:{s:document.querySelector('#table-search').value}" {% endif %}
+
+         class="previous cursor-pointer ">
+        <span class="sr-only">Previous</span>
+        <svg class="w-4 h-4"
+             aria-hidden="true"
+             fill="currentColor"
+             viewBox="0 0 20 20"
+             xmlns="http://www.w3.org/2000/svg">
+          <path fill-rule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clip-rule="evenodd">
+          </path>
+        </svg>
+      </a>
+    </li>
+    {% for page in pages %}
+      <li>
+        {% if page.allow == False %}
+          <a disabled="disabled"
+             class="cursor-pointer px-3 py-2 leading-tight text-gray-500 bg-white border border-gray-300 hover:bg-gray-100 hover:text-gray-700 dark:bg-gray-800 dark:border-gray-700 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white">
+            {{ page.number }}
+          </a>
+        {% else %}
+          <a hx-get="{% url 'core:load-products' %}?l={{ limit }}&p={{ page.number }}"
+             hx-target="#results"
+             hx-vals="js:{s:document.querySelector('#table-search').value}"
+             {% if page.number == page_obj.number %}aria-current="page"{% endif %}
+             class="cursor-pointer px-3 py-2 leading-tight text-gray-500 bg-white border border-gray-300 hover:bg-gray-100 hover:text-gray-700 dark:bg-gray-800 dark:border-gray-700 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white">
+            {{ page.number }}
+          </a>
+        {% endif %}
+      </li>
+    {% endfor %}
+    <li>
+      <a {% if page_obj.has_next %} hx-get="{% url 'core:load-products' %}?l={{ limit }}&p={{ page_obj.next_page_number }}" hx-target="#results" hx-vals="js:{s:document.querySelector('#table-search').value}" {% endif %}
+         class="next cursor-pointer">
+        <span class="sr-only">Next</span>
+        <svg class="w-4 h-4"
+             aria-hidden="true"
+             fill="currentColor"
+             viewBox="0 0 20 20"
+             xmlns="http://www.w3.org/2000/svg">
+          <path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clip-rule="evenodd">
+          </path>
+        </svg>
+      </a>
+    </li>
+  </ul>
+</nav>

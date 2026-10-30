@@ -1,0 +1,43 @@
+{% load humanize %}
+<div class="flex flex-col space-y-2">
+  <div class="flex flex-col space-y-4">
+    <div class="flex items-center justify-between w-full bg-green-500/30 border border-gray-300 px-2 py-1">
+      <h2 class="text-xl font-semibold border-b-2 border-gray-800">Sales Reports</h2>
+      <div x-data="{start: '{{ start_date }}', end: '{{ end_date }}', users: ''}"
+        class="flex space-x-6 items-center ">
+        <div class="flex items-center space-x-5">
+          <label for="date_start" class="text-[10px] font-semibold">From Date:</label>
+          <input class="text-xs" x-model="start" type="date" name="date_start" id="date_start" class="px-1 py-0.5 text-xs" value="{{ start_date }}">
+        </div>
+        <div class="flex items-center space-x-5">
+          <label for="date_end" class="text-[10px] font-semibold">To Date:</label>
+          <input class="text-xs" x-model="end" type="date" name="date_end" id="date_end" class="px-1 py-0.5 text-xs" value="{{ end_date }}">
+        </div>
+        <div class="flex items-center space-x-5">
+          <label for="users" class="text-[10px] font-semibold">For:</label>
+          
+          <select name="users" id="users" x-model="users" class="px-1 py-0.5 text-xs">
+            <option value="all">All Users</option>
+            {% for user in users %}
+            <option value="{{ user.pk }}">{{ user }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <button :disabled="start === '' || end === ''" hx-post="{% url 'core:sales-reports-dates' %}"
+          hx-target="#reports" hx-swap="innerHTML"
+          hx-vals="js:{date_start: document.querySelector('#date_start').value, date_end: document.querySelector('#date_end').value, users: document.querySelector('#users').value}"
+          hx-indicator="#indicator"
+          class="text-white px-3 py-2 rounded-md bg-gray-600 hover:bg-gray-500 font-semibold text-sm">Fetch
+          Report</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="reports" class="mt-6 border-2 border-gray-100 px-6 py-4 rounded-md bg-gray-200/40 w-full h-full"
+  hx-post="{% url 'core:sales-reports-dates' %}"
+  hx-target="#reports" hx-swap="innerHTML"         
+  hx-vals="js:{date_start: document.querySelector('#date_start').value, date_end: document.querySelector('#date_end').value, users: document.querySelector('#users').value}"
+  hx-indicator="#indicator"
+  hx-trigger="load"
+  ></div>
+</div>

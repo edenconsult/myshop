@@ -1,0 +1,31 @@
+[project]
+name = "myshop"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "celery>=5.6.3",
+    "celery-progress>=0.5",
+    "celery-types>=0.26.0",
+    "django>=6.1.2",
+    "django-browser-reload>=1.21.0",
+    "django-celery-results>=2.6.0",
+    "django-compressor>=4.6.0",
+    "django-cors-headers>=4.9.0",
+    "django-extensions>=4.1",
+    "django-filter>=26.2",
+    "django-htmx>=1.29.0",
+    "django-pdfkit>=0.3.1",
+    "django-tables2>=3.0.1",
+    "django-tailwind>=4.6.0",
+    "django-widget-tweaks>=1.5.1",
+    "django-wkhtmltopdf>=3.4.0",
+    "pdfkit>=0.6.0",
+    "pillow>=13.0.0",
+    "pip>=26.2.2",
+    "psycopg2>=2.9.13",
+    "redis>=8.1.0",
+    "weasyprint>=70.0",
+    "whitenoise>=6.12.0",
+]

@@ -1,0 +1,29 @@
+{% extends "core/_core_base.html" %}
+{% block title %} Products | {% endblock title %}
+{% block nav %}
+{% include "core/partials/nav.html" %}
+{% endblock nav %}
+{% block content %}
+  <div x-data="{ids: [], selectAll : false,
+    toggleAllCheckboxes() {
+        this.selectAll = !this.selectAll
+        this.ids = [];
+
+        checkboxes = document.querySelectorAll('input[name=products]');
+        [...checkboxes].map((el) => {
+            el.checked = this.selectAll;
+            (this.selectAll) ? this.ids.push(el.value) : this.ids = [];
+        })
+    },}">
+    <div class="grid grid-cols-3 gap-y-16 gap-x-10 w-full">
+      <div id="results"
+           class="col-span-2"
+           hx-get="{% url 'core:load-products' %}?l=10"
+           hx-trigger="load, reload_products_table from:body"
+           hx-target="this"></div>
+      <div class="flex flex-col space-y-6 px-4 py-6"
+           id="new_products"
+           >{% include "core/partials/product_action_buttons.html" %}</div>
+    </div>
+  </div>
+{% endblock content %}

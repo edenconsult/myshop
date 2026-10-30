@@ -1,0 +1,36 @@
+{% load humanize %}
+<div class="flex items-center justify-between w-full bg-green-500/30 border border-gray-300 px-2 py-1"
+  x-data="{order_date: '', users: 'all'}">
+  <h2 class="text-xl font-semibold border-b-2 border-gray-800">All Orders</h2>
+  <div class="flex items-center space-x-5">
+    <div class="flex items-center space-x-5">
+      <label for="order_date" class="text-[10px] font-semibold">Select Date:</label>
+      <select name="order_date" id="order_date" x-model="order_date">
+        <option value="">Choose date</option>
+        {% for date in dates %}
+        <option value="{{ date|date:'Y-m-d' }}">{{ date | naturalday }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="flex items-center space-x-5">
+      <label for="users" class="text-[10px] font-semibold">For User:</label>
+      <select name="users" id="users" x-model="users" class="px-1 py-0.5 text-xs">
+        <option value="all">All Users</option>
+        {% for user in users %}
+        <option value="{{ user.pk }}">{{ user }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <button :disabled="order_date === '' || users === ''" hx-swap="innerHTML"
+      hx-post="{% url 'core:fetch-days-orders' %}" hx-target="#all_orders"
+      hx-vals="js:{order_date: document.querySelector('#order_date').value,  users: document.querySelector('#users').value}"
+      hx-indicator="#indicator"
+      class="text-white px-3 py-2 rounded-md bg-gray-600 hover:bg-gray-500 font-semibold text-sm">Fetch
+      Orders</button>
+  </div>
+</div>
+<div class="grid w-full grid-cols-4 gap-x-8 gap-y-6">
+  <div class="flex flex-col col-span-2 px-3 py-2" id="all_orders">
+  </div>
+  <div id="order_details" class="col-span-2 p-2"></div>
+</div>

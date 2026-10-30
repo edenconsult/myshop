@@ -1,0 +1,12 @@
+<div class="w-full flex flex-col space-y-1">
+  <div class="w-full bg-gray-200 rounded-full dark:bg-gray-700">
+    <div class="bg-blue-600 text-xs font-medium text-blue-100 text-center p-0.5 leading-none rounded-full"
+      style="width: {{ info.progress.percent }}%"> {{ info.progress.percent }}%</div>
+  </div>
+
+  {% if info.complete %}
+  <div>Task completed!</div>
+  {% else %}
+  <div>{{ info.progress.description }}</div>
+  {% endif %}
+</div>

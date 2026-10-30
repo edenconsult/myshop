@@ -1,0 +1,100 @@
+{% load humanize %}
+<tr x-data="{ name: '{{ product.name }}', stock: {{ product.stock }}, subtract: function() { if (this.stock !== 0 ) { this.stock = parseInt(this.stock) - 1; } }, add: function() { this.stock = parseInt(this.stock) + 1; } }"
+    id="product_{{ product.id }}"
+    class="bg-white border-b dark:bg-gray-800 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600">
+  <td class="w-4 p-1.5">
+    <div class="flex items-center">
+      <input id="checkbox-table-search-1"
+             type="checkbox"
+             x-model="ids"
+             name="products"
+             value="{{ product.id }}"
+             class="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 dark:focus:ring-blue-600 dark:ring-offset-gray-800 dark:focus:ring-offset-gray-800 focus:ring-2 dark:bg-gray-700 dark:border-gray-600">
+      <label for="checkbox-table-search-1" class="sr-only">checkbox</label>
+    </div>
+  </td>
+  <th scope="row"
+      class="px-3 py-1 font-medium text-gray-900 whitespace-nowrap dark:text-white">{{ product.name }}</th>
+  <td class="px-3 py-1">
+    <div class="flex items-center space-x-3">
+      <button title="Decrease stock count" class="inline-flex items-center p-1 text-sm font-medium text-gray-500 bg-white border border-gray-300 rounded-full focus:outline-none hover:bg-gray-100 focus:ring-4 focus:ring-gray-200 dark:bg-gray-800 dark:text-gray-400 dark:border-gray-600 dark:hover:bg-gray-700 dark:hover:border-gray-600 dark:focus:ring-gray-700"
+              type="button"
+              @click="subtract()"
+              hx-post="{% url 'core:update-product-stock' product.id %}?p={{ page_obj.number }}"
+              hx-target="closest tr"
+              hx-swap="outerHTML"
+              hx-vals="js:{stock:document.querySelector('#product_{{ product.id }}_stock').value}">
+        <span class="sr-only">thisQuantity button</span>
+        <svg class="w-4 h-4"
+             aria-hidden="true"
+             fill="currentColor"
+             viewBox="0 0 20 20"
+             xmlns="http://www.w3.org/2000/svg">
+          <path fill-rule="evenodd" d="M3 10a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z" clip-rule="evenodd"></path>
+        </svg>
+      </button>
+      <div>
+        <input id="product_{{ product.id }}_stock"
+               type="number"
+               id="qty"
+               value="{{ product.stock }}"
+               x-model="stock"
+               class="bg-gray-50 w-14 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block px-2.5 py-1 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500"
+               placeholder="1"
+               min="1"
+               required>
+      </div>
+      <button title="Increase stock count" class="inline-flex items-center p-1 text-sm font-medium text-gray-500 bg-white border border-gray-300 rounded-full focus:outline-none hover:bg-gray-100 focus:ring-4 focus:ring-gray-200 dark:bg-gray-800 dark:text-gray-400 dark:border-gray-600 dark:hover:bg-gray-700 dark:hover:border-gray-600 dark:focus:ring-gray-700"
+              type="button"
+              @click="add()"
+              hx-post="{% url 'core:update-product-stock' product.id %}?p={{ page_obj.number }}"
+              hx-target="closest tr"
+              hx-swap="outerHTML"
+              hx-vals="js:{stock:document.querySelector('#product_{{ product.id }}_stock').value}">
+        <span class="sr-only">Quantity button</span>
+        <svg class="w-4 h-4"
+             aria-hidden="true"
+             fill="currentColor"
+             viewBox="0 0 20 20"
+             xmlns="http://www.w3.org/2000/svg">
+          <path fill-rule="evenodd" d="M10 5a1 1 0 011 1v3h3a1 1 0 110 2h-3v3a1 1 0 11-2 0v-3H6a1 1 0 110-2h3V6a1 1 0 011-1z" clip-rule="evenodd">
+          </path>
+        </svg>
+      </button>
+    </div>
+  </td>
+  <td class="px-3 py-1">GHs{{ product.cost }}</td>
+  <td class="px-3 py-1">GHs{{ product.price }}</td>
+  <td class="px-3 py-1">{{ product.profit_rate }}</td>
+  <td class="px-3 py-1">
+    <small>{{ product.updated|naturaltime }}</small>
+  </td>
+  <td class="flex items-center px-3 py-1 space-x-3">
+    <button title="Update this product"  hx-get="{% url 'core:update-product' product.id %}"
+            hx-target="#new_products"
+            class="text-blue-400 hover:text-blue-600">
+      <svg xmlns="http://www.w3.org/2000/svg"
+           fill="none"
+           viewBox="0 0 24 24"
+           stroke-width="1.5"
+           stroke="currentColor"
+           class="w-6 h-6">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0115.75 21H5.25A2.25 2.25 0 013 18.75V8.25A2.25 2.25 0 015.25 6H10" />
+      </svg>
+    </button>
+    <button title="Remove this product"  hx-get="{% url 'core:remove-a-product-question' product.id %}"
+            hx-target="#new_products"
+            class="text-red-400 hover:text-red-600">
+      <svg class="w-6 h-6"
+           aria-hidden="true"
+           fill="currentColor"
+           viewBox="0 0 20 20"
+           stroke="currentColor"
+           stroke-width="1.5"
+           xmlns="http://www.w3.org/2000/svg">
+        <path d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" stroke-linecap="round" stroke-linejoin="round">
+        </path>
+      </svg>
+    </button>
+  </td>
+</tr>

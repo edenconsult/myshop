@@ -1,0 +1,28 @@
+{% for product in page_obj %}
+  {% if forloop.last and page_obj.has_next %}
+    <tr hx-get="{% url 'sales:load-orders-products' %}?p={% if page_obj.has_next %}{{ page_obj.next_page_number }}{% endif %}"
+        hx-swap="afterend"
+        hx-target="this"
+        hx-trigger="intersect once"
+        hx-vals="js:{ s: document.querySelector('#table-search').value }"
+        x-data="{id: '{{ product.id }}', name: '{{ product.name }}', stock: {{ product.stock }}, price: {{ product.price }} }"
+        class="text-[10px] flex items-center bg-white border-b dark:bg-gray-800 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600">
+    {% else %}
+      <tr x-data="{id: '{{ product.id }}', name: '{{ product.name }}', stock: {{ product.stock }}, price: {{ product.price }} }"
+          class="flex items-center bg-white border-b dark:bg-gray-800 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600">
+      {% endif %}
+      <td class="flex-1 px-3 py-2 font-medium text-center text-gray-900 dark:text-white"
+          x-text="name"></td>
+      <td class="flex-1 px-3 py-2 text-center" x-text="stock"></td>
+      <td class="flex-1 px-3 py-2 text-center text-gray-900 dark:text-white"
+          x-text="price"></td>
+      <td class="flex-1 px-3 py-2 text-center">
+        <button type="button"
+                @click="() => add_to_card(id, name, stock, price)"
+                type="button"
+                class="text-[8px] px-2 py-1 mb-2 font-medium text-center text-white bg-red-700 rounded-full hover:bg-red-800 focus:outline-none focus:ring-4 focus:ring-red-300 dark:bg-red-600 dark:hover:bg-red-700 dark:focus:ring-red-900">
+          Add to Cart
+        </button>
+      </td>
+    </tr>
+  {% endfor %}

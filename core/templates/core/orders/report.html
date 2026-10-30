@@ -1,0 +1,68 @@
+{% load humanize %}
+<div class="grid grid-cols-3 gap-8">
+<div class="flex flex-col space-y-2 w-full">
+  <div
+    class="flex justify-between items-center px-4 py-3 w-full h-full space-y-5 text-center rounded-md bg-gradient-to-r from-blue-400 via-blue-500 to-blue-700">
+    <h2 class="text-sm font-semibold underline">Products Sold</h2>
+    <div class="flex flex-col">
+      <p class="text-white">
+        <span class="text-4xl font-bold">{{ summary.stock_sold|intcomma }}</span>
+      </p>
+    </div>
+  </div>
+  <div
+    class="flex justify-between items-center px-4 py-3 w-full h-full space-y-5 text-center rounded-md bg-gradient-to-r from-fuchsia-400 via-fuchsia-500 to-fuchsia-700">
+    <h2 class="text-sm font-semibold underline">Total Cost</h2>
+    <p class="text-white">
+      GHs<span class="text-4xl font-bold">{{ summary.total_cost|intcomma }}</span>
+    </p>
+  </div>
+  <div
+    class="flex justify-between items-center px-4 py-3 w-full h-full space-y-5 text-center rounded-md bg-gradient-to-r from-orange-400 via-orange-500 to-orange-700">
+    <h2 class="text-sm font-semibold underline">Total Sales</h2>
+    <div class="flex flex-col">
+      <p class="text-white">
+        GHs<span class="text-4xl font-bold">{{ summary.total_sold|intcomma }}</span>
+      </p>
+    </div>
+  </div>
+  <div
+    class="flex justify-between items-center px-4 py-3 w-full h-full space-y-5 text-center rounded-md bg-gradient-to-r from-green-400 via-green-500 to-green-700">
+    <h2 class="text-sm font-semibold underline">Total Profit</h2>
+    <div class="flex flex-col">
+      <p class="text-white">
+        GHs<span class="text-4xl font-bold">{{ summary.profit|intcomma }}</span>
+      </p>
+    </div>
+  </div>
+</div>
+<div class="col-span-2 flex flex-col space-y-4">
+  <div>
+    <table class="w-full text-xs text-left text-gray-500 border-collapse table-fixed dark:text-gray-400">
+      <thead class="text-xs text-gray-700 uppercase bg-gray-50 dark:bg-gray-700 dark:text-gray-400">
+        <tr class="flex">
+          <th scope="col" class="w-16 px-3 py-2 text-center">S/No.</th>
+          <th scope="col" class="flex-1 px-3 py-2 text-center">Item Name</th>
+          <th scope="col" class="flex-1 px-3 py-2 text-center">Qty Bought</th>
+          <th scope="col" class="flex-1 px-3 py-2 text-center">Total Amount</th>
+        </tr>
+      </thead>
+      <tbody class="overflow-y-auto block h-[400px]" id="tbody">
+        {% for item in summary.items %}
+          <tr class="flex items-center bg-white border-b dark:bg-gray-800 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600">
+            <td class="w-16 px-3 py-2 text-center">{{ forloop.counter }}</td>
+            <td class="flex-1 px-3 py-2 font-medium text-center text-gray-900 dark:text-white">{{ item.product__name }}</td>
+            <td class="flex-1 px-3 py-2 text-center">{{ item.sum_qty }}</td>
+            <td class="flex-1 px-3 py-2 text-center">GHs{{ item.amount }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <a href="{% url 'core:print-reports' start_date end_date users %}"
+         class="text-white bg-gradient-to-r from-gray-500 via-gray-600 to-gray-700 hover:bg-gradient-to-br focus:ring-4 focus:outline-none focus:ring-gray-300 dark:focus:ring-gray-800 shadow-lg shadow-gray-500/50 dark:shadow-lg dark:shadow-gray-800/80 font-medium rounded-lg text-sm px-5 py-2.5 text-center mr-2 mb-2 ">
+        Download Reports
+      </a>
+</div>
+</div>

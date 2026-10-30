@@ -1,7 +1,7 @@
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.db import transaction
-from django.shortcuts import render
-from django.db.models import F, Sum, ExpressionWrapper, DecimalField
+from django.shortcuts import get_object_or_404, render
+from django.db.models import F, Sum, ExpressionWrapper, DecimalField, Prefetch
 from decimal import Decimal
 
 from authapp.models import Account
@@ -74,7 +74,7 @@ def load_products(request):
 
     context = {
         "page_obj": page_obj,
-        "number_of_products": len(products),
+        "number_of_products": products.count(),
         "starting_number": starting_number,
         "stopping_number": stopping_number,
         "limit": limit,
@@ -88,10 +88,18 @@ def load_products(request):
 @login_required
 @user_passes_test(is_admin)
 def update_product_stock(request, product_id):
-    product = Product.objects.get(pk=product_id)
+    product = get_object_or_404(Product, pk=product_id)
     stock = request.POST.get("stock")
 
-    product.stock = stock
+    try:
+        product.stock = int(stock)
+    except (TypeError, ValueError):
+        context = {
+            "type": "danger",
+            "message": "Stock must be a whole number.",
+        }
+        return render(request, "core/products/response.html", context)
+
     product.save()
     context = {"product": product}
     return render(request, "core/partials/product_table_row.html", context)
@@ -321,29 +329,22 @@ def orders(request):
 @login_required
 @user_passes_test(is_admin)
 def products_summary(request):
-    stock_info = Product.objects.all().aggregate(sum_stock=Sum("stock"))
-    cost_info = Product.objects.annotate(total_cost=F("cost") * F("stock")).aggregate(
-        sum_cost=Sum("total_cost")
+    money_field = DecimalField(max_digits=12, decimal_places=2)
+    totals = Product.objects.aggregate(
+        sum_stock=Sum("stock"),
+        sum_cost=Sum(F("cost") * F("stock"), output_field=money_field),
+        sum_sales=Sum(F("price") * F("stock"), output_field=money_field),
     )
-    sales_info = Product.objects.annotate(
-        total_sales=F("price") * F("stock")
-    ).aggregate(sum_sales=Sum("total_sales"))
 
-    profit = 0
-
-    if sales_info["sum_sales"] is not None and cost_info["sum_cost"] is not None:
-        profit = round(float(sales_info["sum_sales"]) - float(cost_info["sum_cost"]), 2)
+    if totals["sum_sales"] is not None and totals["sum_cost"] is not None:
+        profit = round(float(totals["sum_sales"]) - float(totals["sum_cost"]), 2)
+    else:
+        profit = 0
 
     context = {
-        "stock_sum": stock_info["sum_stock"]
-        if stock_info["sum_stock"] is not None
-        else 0,
-        "cash_invested": cost_info["sum_cost"]
-        if cost_info["sum_cost"] is not None
-        else 0,
-        "after_orders": sales_info["sum_sales"]
-        if sales_info["sum_sales"] is not None
-        else 0,
+        "stock_sum": totals["sum_stock"] if totals["sum_stock"] is not None else 0,
+        "cash_invested": totals["sum_cost"] if totals["sum_cost"] is not None else 0,
+        "after_orders": totals["sum_sales"] if totals["sum_sales"] is not None else 0,
         "profit": profit,
     }
     return render(request, "core/products/summary.html", context)
@@ -368,6 +369,7 @@ def orders_products(request):
 def load_orders_products(request):
     products = Product.objects.filter(Q(stock__gt=0)).order_by("name")
 
+    page = 1
     if request.GET.get("p") is not None and request.GET.get("p") != "":
         page = int(request.GET.get("p"))
 
@@ -396,102 +398,117 @@ def make_order(request):
         context = {"type": msg_type, "message": message}
         return render(request, "core/orders/order_made.html", context)
 
-    new_order_items = []
-    order_errors = []
-    # check order items
-    for item in items:
-        product_check_valid = True
-        product = Product.objects.get(id=item.get("id"))
+    order_obj = None
+    try:
+        with transaction.atomic():
+            # fetch all products at once, locking their rows for the duration
+            # of the transaction so two parallel sales cannot oversell stock
+            products = {
+                str(product.id): product
+                for product in Product.objects
+                .select_for_update()
+                .filter(id__in=[item.get("id") for item in items])
+            }
 
-        # if the product does not exist
-        if product is None:
-            product_check_valid = False
-            order_errors.append(
-                {"item": item, "error": f"Product {item.get('id')} not found"}
-            )
+            order_errors = []
+            new_order_items = []
+            for item in items:
+                product = products.get(str(item.get("id")))
+                qty = int(item.get("qty", 0))
 
-        # else if stock is less than the required quantity
-        elif int(item.get("qty")) > product.stock:
-            product_check_valid = False
+                # if the product does not exist
+                if product is None:
+                    order_errors.append(
+                        {"item": item, "error": f"Product {item.get('id')} not found"}
+                    )
+                    continue
 
-        # else if the calculated total price send is wrong,
-        elif float(item.get("total_price")) != float(
-            product.price * int(item.get("qty"))
-        ):
-            product_check_valid = False
-            order_errors.append(
-                {
-                    "item": item,
-                    "error": f"Product {product} items calculation was wrong",
-                }
-            )
+                # else if stock is less than the required quantity
+                if qty > product.stock:
+                    continue
 
-        # if item passed the product checks
-        if product_check_valid:
-            new_order_items.append({"product": product, "item": item})
-        else:
-            print(order_errors)
+                # else if the calculated total price send is wrong,
+                if float(item.get("total_price")) != float(product.price * qty):
+                    order_errors.append(
+                        {
+                            "item": item,
+                            "error": f"Product {product} items calculation was wrong",  # noqa: E501
+                        }
+                    )
+                    continue
 
-    if len(items) != len(new_order_items):
-        message = "Something went wrong. Your order could not be initiated."
-        context = {"type": "danger", "message": message}
-        return render(request, "core/orders/order_made.html", context)
+                # if item passed the product checks
+                new_order_items.append({"product": product, "item": item, "qty": qty})
 
-    with transaction.atomic():
-        try:
+            if len(items) != len(new_order_items):
+                raise ValueError("Order validation failed")
+
             # create new order
             order_obj = Order.objects.create(
                 user=request.user, code=generate_code(max_length=6)
             )
-            for ordItem in new_order_items:
-                OrderItem.objects.create(
-                    order=order_obj,
-                    product=ordItem["product"],
-                    qty_bought=int(ordItem["item"].get("qty")),
-                    paid_amount=float(ordItem["item"].get("total_price")),
-                )
 
-                # update each product's stock to reflect the last order
-                ordItem["product"].stock -= int(ordItem["item"].get("qty"))
-                ordItem["product"].save()
+            # insert every order item in a single query
+            OrderItem.objects.bulk_create(
+                OrderItem(
+                    order=order_obj,
+                    product=entry["product"],
+                    qty_bought=entry["qty"],
+                    paid_amount=Decimal(str(entry["item"].get("total_price"))),
+                )
+                for entry in new_order_items
+            )
+
+            # update each product's stock to reflect the last order
+            for entry in new_order_items:
+                entry["product"].stock -= entry["qty"]
+            Product.objects.bulk_update(
+                (entry["product"] for entry in new_order_items),
+                ["stock"],
+                batch_size=100,
+            )
 
             # update overall amount paid in this order
             order_obj.overall_amount_paid = sum(
-                float(item.get("total_price")) for item in items
+                Decimal(str(item.get("total_price"))) for item in items
             )
-            order_obj.save()
-        except Exception:
-            # if anything goes wrong, all changes will be reversed.
-            message = "Your order was not successfully. Try again at a later time."
-            msg_type = "danger"
-        else:
-            # order was successful
-            today = dt.date.today()
-            date_start = timezone.make_aware(
-                dt.datetime(year=today.year, month=today.month, day=today.day, hour=6)
-            )
-            date_end = timezone.make_aware(
-                dt.datetime(year=today.year, month=today.month, day=today.day, hour=20)
-            )
-            order_list = Order.objects.filter(
-                Q(user=request.user),
-                Q(created__gte=date_start),
-                Q(created__lt=date_end),
-            ).order_by("created")
-            order_number = len(order_list)
-            message = f"Order Number {order_obj.code} totaling GHs {order_obj.overall_amount_paid:.2f} was successful. Thank you."  # noqa: E501
-            msg_type = "success"
-            context = {
-                "type": msg_type,
-                "message": message,
-                "order": order_obj,
-                "order_number": order_number,
-            }
-            response = render(request, "core/orders/order_made.html", context)
-            return trigger_client_event(response, "reload_products_with_stocks")
+            order_obj.save(update_fields=["overall_amount_paid", "updated"])
+    except ValueError:
+        # one or more items failed validation, nothing was saved
+        message = "Something went wrong. Your order could not be initiated."
+        msg_type = "danger"
+        context = {"type": msg_type, "message": message}
+        return render(request, "core/orders/order_made.html", context)
+    except Exception:
+        # if anything goes wrong, all changes will be reversed.
+        message = "Your order was not successfully. Try again at a later time."
+        msg_type = "danger"
+        context = {"type": msg_type, "message": message}
+        return render(request, "core/orders/order_made.html", context)
 
-    context = {"type": msg_type, "message": message}
-    return render(request, "core/orders/order_made.html", context)
+    # order was successful
+    today = dt.date.today()
+    date_start = timezone.make_aware(
+        dt.datetime(year=today.year, month=today.month, day=today.day, hour=6)
+    )
+    date_end = timezone.make_aware(
+        dt.datetime(year=today.year, month=today.month, day=today.day, hour=20)
+    )
+    order_number = Order.objects.filter(
+        Q(user=request.user),
+        Q(created__gte=date_start),
+        Q(created__lt=date_end),
+    ).count()
+    message = f"Order Number {order_obj.code} totaling GHs {order_obj.overall_amount_paid:.2f} was successful. Thank you."  # noqa: E501
+    msg_type = "success"
+    context = {
+        "type": msg_type,
+        "message": message,
+        "order": order_obj,
+        "order_number": order_number,
+    }
+    response = render(request, "core/orders/order_made.html", context)
+    return trigger_client_event(response, "reload_products_with_stocks")
 
 
 @login_required
@@ -644,8 +661,15 @@ def print_todays_orders(request, date, users):
 @login_required
 @user_passes_test(is_admin)
 def view_order(request, order_id, order_number):
-    # order_stock = Order.objects.aggregate(sum_stock = Sum('orderitem__stock'))
-    order = Order.objects.get(id=order_id)
+    order = get_object_or_404(
+        Order.objects.prefetch_related(
+            Prefetch(
+                "orderitem_set",
+                queryset=OrderItem.objects.select_related("product"),
+            )
+        ),
+        id=order_id,
+    )
     context = {"order": order, "order_number": order_number}
     return render(request, "core/orders/order_details.html", context)
 
@@ -683,50 +707,6 @@ def retrive_reports(request):
         "core/orders/sales_reports.html",
         {"start_date": start_date, "end_date": end_date, "users": users},
     )
-
-
-def generate_reports(order_list):
-    orderitems = OrderItem.objects.filter(order__in=order_list)
-
-    orderitems_summary = orderitems.annotate(
-        total_cost=F("qty_bought") * F("product__cost"),
-        total_sold=F("qty_bought") * F("product__price"),
-        total_profit=F("qty_bought") * F("product__price")
-        - F("qty_bought") * F("product__cost"),
-    ).aggregate(
-        total_cost=Sum("total_cost"),
-        total_sold=Sum("total_sold"),
-        stock_sold=Sum("qty_bought"),
-        total_profit=Sum("total_profit"),
-    )
-
-    order_items = (
-        orderitems.values("product__name")
-        .annotate(
-            sum_qty=Sum("qty_bought"),
-            amount=Sum("paid_amount"),
-        )
-        .distinct()
-        .order_by("-sum_qty")
-    )
-
-    context = {
-        "total_cost": orderitems_summary["total_cost"]
-        if orderitems_summary["total_cost"]
-        else 0_00,
-        "total_sold": orderitems_summary["total_sold"]
-        if orderitems_summary["total_sold"]
-        else 0_00,
-        "stock_sold": orderitems_summary["stock_sold"]
-        if orderitems_summary["stock_sold"]
-        else 0,
-        "profit": orderitems_summary["total_profit"]
-        if orderitems_summary["total_profit"]
-        else 0_00,
-        "items": order_items,
-    }
-    return context
-
 
 
 def generate_reports(order_list):
@@ -846,12 +826,10 @@ def retrive_reports_by_dates(request):
             Q(created__date__gte=start_date.date()),
             Q(created__date__lte=end_date.date()),
         )
-    print(order_lists)
     if users != "all":
         users = Account.objects.get(pk=users)
         order_lists = order_lists.filter(user=users)
 
-    print(order_lists)
     summary = generate_reports(order_list=order_lists)
 
     return render(

@@ -37,6 +37,14 @@ class Order(models.Model):
 
     objects = models.Manager()
 
+    class Meta:
+        indexes = [
+            # nearly every report/order view filters or sorts on created
+            models.Index(fields=["created"], name="order_created_idx"),
+            # daily per-salesperson order lists
+            models.Index(fields=["user", "created"], name="order_user_created_idx"),
+        ]
+
 
 class OrderItem(models.Model):
     id = models.UUIDField(primary_key=True, editable=False, default=uuid.uuid4)

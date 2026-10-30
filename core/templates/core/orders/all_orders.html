@@ -1,6 +1,7 @@
 {% load humanize %}
-<div class="flex flex-col col-span-2 px-3 py-2 space-y-2 border-2 border-gray-500 bg-gray-200/60">
-    <h3 class="px-2 py-0.5 font-semibold border-b-2 border-gray-500">Orders &mdash; [{{ date }}]</h3>
+<div class="flex flex-col lg:col-span-2 px-3 py-2 space-y-2 border-2 border-gray-500 bg-gray-200/60 dark:border-gray-400 dark:bg-gray-800/60">
+    <h3 class="px-2 py-0.5 font-semibold border-b-2 border-gray-500 dark:border-gray-400 dark:text-gray-100">Orders &mdash; [{{ date }}]</h3>
+        <div class="overflow-x-auto">
         <table id="orders_products_table"
             class="w-full text-[10px] text-left text-gray-500 border-collapse table-fixed dark:text-gray-400">
             <thead class="text-xs text-gray-700 uppercase bg-gray-50 dark:bg-gray-700 dark:text-gray-400">
@@ -11,7 +12,7 @@
                     <th scope="col" class="flex-1 px-3 py-2 text-center">Time Created</th>
                 </tr>
             </thead>
-            <tbody class="overflow-y-auto block h-[350px]" id="tbody">
+            <tbody class="overflow-y-auto block h-56 sm:h-72 md:h-[350px]" id="tbody">
                 {% for order in orders %}
                 <tr
                     class="flex items-center bg-white border-b dark:bg-gray-800 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600">
@@ -26,14 +27,15 @@
                 </tr>
                 {% empty %}
                 <tr class="flex items-center w-full">
-                    <td class="flex-1 px-2 py-1 text-center"><span class="text-sm font-semibold text-red-600">NO ORDERS MADE BY {{  users }} ON THIS DATE {{ date }} </span></td>
+                    <td class="flex-1 px-2 py-1 text-center"><span class="text-sm font-semibold text-red-600 dark:text-red-400">NO ORDERS MADE BY {{  users }} ON THIS DATE {{ date }} </span></td>
                 </tr>
                 {% endfor %}
             </tbody>
         </table>
+        </div>
 
-    <div class="flex items-center justify-between w-full px-3 py-4 bg-green-200 border-2 border-green-300">
-        <h3 class="font-semibold text-green-600">Total Sales: GHs {{ todays_total_orders|default:'0.00' }}</h3>
+    <div class="flex flex-wrap items-center justify-between gap-2 w-full px-3 py-4 bg-green-200 border-2 border-green-300 dark:bg-gray-800 dark:border-gray-600">
+        <h3 class="font-semibold text-green-600 dark:text-green-400">Total Sales: GHs {{ todays_total_orders|default:'0.00' }}</h3>
         {% if orders|length > 0 %}
         <div>
             <a href="{% url 'core:print-todays-orders' date users %}"

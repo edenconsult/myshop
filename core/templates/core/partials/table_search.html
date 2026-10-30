@@ -1,8 +1,8 @@
 {% load humanize %}
 <div class="relative px-4 py-3 shadow-md sm:rounded-lg">
-  <div class="flex items-center justify-between pb-4">
+  <div class="flex flex-wrap items-center justify-between gap-2 pb-4">
     <div>
-      <h2 class="text-xl font-semibold border-b-2 border-gray-800">All Products</h2>
+      <h2 class="text-xl font-semibold border-b-2 border-gray-800 dark:border-gray-400 dark:text-gray-100">All Products</h2>
     </div>
     <label for="table-search" class="sr-only">Search</label>
     <div class="relative">
@@ -29,6 +29,7 @@
   </div>
   {% if page_obj|length > 0 %}
     {% with page_obj as products %}
+      <div class="overflow-x-auto">
       <table class="w-full text-xs text-left text-gray-500 dark:text-gray-400">
         <thead class="text-xs text-gray-700 uppercase bg-gray-50 dark:bg-gray-700 dark:text-gray-400">
           <tr>
@@ -56,6 +57,7 @@
           {% endfor %}
         </tbody>
       </table>
+      </div>
     {% endwith %}
     {% include "partials/pagination.html" %}
   {% else %}

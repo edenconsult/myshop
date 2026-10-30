@@ -1,7 +1,7 @@
-<div class="flex flex-col space-y-4 border-2 border-gray-200 bg-gray-100 px-4 py-1.5 rounded-md">
-  <div class="flex items-center justify-between pb-4">
+<div class="flex flex-col space-y-4 border-2 border-gray-200 bg-gray-100 px-4 py-1.5 rounded-md dark:border-gray-700 dark:bg-gray-800">
+  <div class="flex flex-wrap items-center justify-between gap-2 pb-4">
     <div>
-      <h2 class="text-xl font-semibold border-b-2 border-gray-800">Products Out of Stock</h2>
+      <h2 class="text-xl font-semibold border-b-2 border-gray-800 dark:border-gray-400 dark:text-gray-100">Products Out of Stock</h2>
     </div>
     <label for="table-search" class="sr-only">Search</label>
     <div class="relative">
@@ -26,7 +26,7 @@
              placeholder="Search for items">
     </div>
   </div>
-  <div class="relative shadow-md sm:rounded-lg">
+  <div class="relative shadow-md sm:rounded-lg overflow-x-auto">
     <table id="orders_products_table"
            class="w-full text-xs text-left text-gray-500 border-collapse table-fixed dark:text-gray-400">
       <thead class="text-xs text-gray-700 uppercase bg-gray-50 dark:bg-gray-700 dark:text-gray-400">
@@ -42,7 +42,7 @@
              hx-get="{% url 'core:load-orders-products' %}?p=1&s="
              hx-trigger="reload_products_with_stocks from:body"
              _="on keyup from #table-search remove <#orders_products_table>tbody>tr/>"
-             class="overflow-y-auto block h-[450px]"
+             class="overflow-y-auto block h-56 sm:h-72 md:h-[450px]"
              id="tbody">
         {% include "core/products/out_of_stock_items.html" %}
       </tbody>

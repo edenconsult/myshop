@@ -1,9 +1,9 @@
-<div class="grid grid-cols-4 gap-x-10"
+<div class="grid grid-cols-1 lg:grid-cols-4 gap-6 lg:gap-x-10"
      x-data="{items: [], calcTotalPrice(item) { item.total_price= parseFloat(item.price * item.qty).toFixed(2); return item.total_price;}, totalPayment() { let amnts = this.items.map(item => parseFloat(item.total_price));return amnts.reduce((a, c)=> a + c, 0).toFixed(2)}, add_to_card(id, name, stock, price) { if (this.items.findIndex(i => i.id === id) === -1) this.items.push({id, name, stock, qty:1, price})}}">
-  <div class="col-span-2">
-    <div class="flex items-center justify-between pb-4">
+  <div class="lg:col-span-2 min-w-0">
+    <div class="flex flex-wrap items-center justify-between gap-2 pb-4">
       <div>
-        <h2 class="text-xl font-semibold border-b-2 border-gray-800">All Products</h2>
+        <h2 class="text-xl font-semibold border-b-2 border-gray-800 dark:border-gray-400 dark:text-gray-100">All Products</h2>
       </div>
       <label for="table-search" class="sr-only">Search</label>
       <div class="relative">
@@ -25,11 +25,11 @@
                hx-target="#tbody"
                hx-swap="innerHTML"
                hx-ext="debug"
-               class="block p-2 pl-10 text-sm text-gray-900 border border-gray-300 rounded-lg w-60 bg-gray-50 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500"
+               class="block p-2 pl-10 text-sm text-gray-900 border border-gray-300 rounded-lg w-full sm:w-60 bg-gray-50 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500"
                placeholder="Search for items">
       </div>
     </div>
-    <div class="relative shadow-md sm:rounded-lg">
+    <div class="relative overflow-x-auto shadow-md sm:rounded-lg dark:bg-gray-800">
       <table id="orders_products_table"
              class="flex flex-col w-full text-xs text-left text-gray-500 border-collapse table-fixed dark:text-gray-400">
         <thead class="h-8 text-xs text-gray-700 uppercase bg-gray-50 dark:bg-gray-700 dark:text-gray-400">
@@ -45,15 +45,17 @@
                hx-get="{% url 'sales:load-orders-products' %}?p=1&s="
                hx-trigger="reload_products_with_stocks from:body"
                _="on keyup from #table-search remove <#orders_products_table>tbody>tr/>"
-               class="block overflow-y-auto h-[400px] md:h-[440px] lg:h-[460px] xl:h-[480px] 2xl:h-[500px]"
+               class="block overflow-y-auto h-72 md:h-[440px] lg:h-[460px] xl:h-[480px] 2xl:h-[500px]"
                id="tbody">
           {% include "sales/orders/products_with_stocks_table_rows.html" %}
         </tbody>
       </table>
     </div>
   </div>
-  <div id="cart" class="col-span-2 p-4 pb-0 bg-green-100">{% include "sales/orders/cart_table.html" %}</div>
+  <div id="cart" class="lg:col-span-2 p-4 pb-0 bg-green-100 dark:bg-gray-800 min-w-0">{% include "sales/orders/cart_table.html" %}</div>
 </div>
+<!-- Spacer so the fixed mobile payment bar doesn't cover page content -->
+<div class="h-20 lg:hidden"></div>
 <script>
   function subtract(qty, stock) { 
     if (qty > 1 ) { 
@@ -66,7 +68,7 @@
   function add(qty, stock) { 
     let next_qty = qty + 1;
     if (next_qty <= stock) return next_qty; 
-    return stock;
+    return stock; 
   }
 
 

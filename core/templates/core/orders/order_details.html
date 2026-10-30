@@ -1,10 +1,10 @@
 {% load humanize %}
-<div class="flex flex-col px-3 py-2 space-y-5 bg-green-200 border-2 border-green-300">
-  <div class="flex items-center justify-between w-full">
-    <h3 class="text-sm font-semibold border-b-2 border-gray-500">Order: <b>{{ order.code }}</b></h3>
-    <h3 class="text-xs">Made By: <b>{{ order.user }}</b></h3>
+<div class="flex flex-col px-3 py-2 space-y-5 bg-green-200 border-2 border-green-300 dark:bg-gray-800 dark:border-gray-600">
+  <div class="flex flex-wrap items-center justify-between gap-2 w-full">
+    <h3 class="text-sm font-semibold border-b-2 border-gray-500 dark:border-gray-400 dark:text-gray-100">Order: <b>{{ order.code }}</b></h3>
+    <h3 class="text-xs dark:text-gray-100">Made By: <b>{{ order.user }}</b></h3>
   </div>
-  <div>
+  <div class="overflow-x-auto">
     <table class="w-full text-xs text-left text-gray-500 border-collapse table-fixed dark:text-gray-400">
       <thead class="text-xs text-gray-700 uppercase bg-gray-50 dark:bg-gray-700 dark:text-gray-400">
         <tr class="flex">
@@ -13,7 +13,7 @@
           <th scope="col" class="flex-1 px-3 py-2 text-center">Total Cost</th>
         </tr>
       </thead>
-      <tbody class="overflow-y-auto block h-[350px]" id="tbody">
+      <tbody class="overflow-y-auto block h-56 sm:h-72 md:h-[350px]" id="tbody">
         {% for order_item in order.orderitem_set.all %}
           <tr class="flex items-center bg-white border-b dark:bg-gray-800 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600">
             <td class="flex-1 px-3 py-2 font-medium text-center text-gray-900 dark:text-white">{{ order_item.product }}</td>
@@ -24,12 +24,12 @@
       </tbody>
     </table>
   </div>
-  <div class="flex items-center justify-between w-full px-3 py-4 bg-green-200 border-2 border-green-300">
+  <div class="flex flex-wrap items-center justify-between gap-2 w-full px-3 py-4 bg-green-200 border-2 border-green-300 dark:bg-gray-800 dark:border-gray-600">
     <div class="flex flex-col space-y-1">
-      <h4 class="text-sm font-light">
+      <h4 class="text-sm font-light dark:text-gray-100">
         Total Amount Paid:  <span class="font-semibold">GHs {{ order.overall_amount_paid }}</span>
       </h4>
-      <span class="text-[10px] text-gray-600">Order Completed On: {{ order.created }}</span>
+      <span class="text-[10px] text-gray-600 dark:text-gray-400">Order Completed On: {{ order.created }}</span>
     </div>
     <div>
     <a href="{% url 'core:print-order-pdf' order.id order_number %}"

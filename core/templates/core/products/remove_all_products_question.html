@@ -1,5 +1,5 @@
-<div class="flex flex-col space-y-6 border-2 border-red-500 px-3 py-1.5 bg-red-50">
-  <h2 class="text-sm font-semibold my-3 border-b-2 border-red-500">
+<div class="flex flex-col space-y-6 border-2 border-red-500 px-3 py-1.5 bg-red-50 dark:bg-gray-800">
+  <h2 class="text-sm font-semibold my-3 border-b-2 border-red-500 dark:text-gray-100">
     Removing
     {% if ids|length > 0 %}
       Selected
@@ -8,7 +8,7 @@
     {% endif %}
     Products
   </h2>
-  <h3 class="text-2xl font-light">This action is irreversible. Are you sure?</h3>
+  <h3 class="text-2xl font-light dark:text-gray-100">This action is irreversible. Are you sure?</h3>
   <div class="flex space-x-6 p-2">
     <button @click="selectAll = false;ids=[]" {% if ids|length > 0 %} hx-post="{% url 'core:do-remove-products' %}" hx-vals="js:{ ids: JSON.parse(document.querySelector('#product_ids').textContent) }" {% else %} hx-get="{% url 'core:do-remove-products' %}" {% endif %}
             hx-target="#new_products"

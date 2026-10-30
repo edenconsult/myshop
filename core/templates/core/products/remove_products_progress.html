@@ -1,6 +1,6 @@
 <div class="flex flex-col space-y-6"
      {% if not info.complete %} hx-get="{% url 'core:remove-products-status' task_id %}" hx-trigger="load delay:100ms" hx-target="this" {% endif %}>
-  <h2 class="text-2xl  border-b-2 border-green-800 mb-2 px-2 py-1.5">
+  <h2 class="text-2xl border-b-2 border-green-800 mb-2 px-2 py-1.5 dark:border-gray-400 dark:text-gray-100">
     Current Task: <span class="text-red-600 font-semibold">Removing products</span>
 </h2>
 {% include "partials/progress_bar.html" %}

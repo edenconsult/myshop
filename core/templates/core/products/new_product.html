@@ -2,7 +2,7 @@
 <div class="w-full p-4 bg-white border border-gray-200 rounded-lg shadow sm:p-6 md:p-8 dark:bg-gray-800 dark:border-gray-700">
   <form {% if product is not None %} hx-post="{% url 'core:update-product' product.id %}" {% else %} hx-post="{% url 'core:add-product' %}" {% endif %}
         hx-target="#new_products">
-    <h2 class="pb-2 mb-3 font-semibold border-b-2 border-gray-600">{{ form_title }}</h2>
+    <h2 class="pb-2 mb-3 font-semibold border-b-2 border-gray-600 dark:border-gray-400 dark:text-gray-100">{{ form_title }}</h2>
     <div class="flex flex-col mb-4 space-y-3">
       {% for field in form %}
         <div class="w-full">

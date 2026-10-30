@@ -15,9 +15,9 @@
             (this.selectAll) ? this.ids.push(el.value) : this.ids = [];
         })
     },}">
-    <div class="grid grid-cols-3 gap-y-16 gap-x-10 w-full">
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-y-16 gap-x-10 w-full">
       <div id="results"
-           class="col-span-2"
+           class="lg:col-span-2"
            hx-get="{% url 'core:load-products' %}?l=10"
            hx-trigger="load, reload_products_table from:body"
            hx-target="this"></div>

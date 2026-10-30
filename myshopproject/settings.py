@@ -1,18 +1,25 @@
 import os
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Load environment variables from the project's .env file
+load_dotenv(BASE_DIR / ".env")
+
+env = os.environ.get
 
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/4.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = "django-insecure-##6#&ge+^*l%o&t9n8agdapve7)iyfobn93+zcpi-3xu+j&#hl"
+SECRET_KEY = env("DJANGO_SECRET_KEY", default="django-insecure-##6#&ge+^*l%o&t9n8agdapve7)iyfobn93+zcpi-3xu+j&#hl")
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = env("DJANGO_DEBUG", default="True") == "True"
 
 ALLOWED_HOSTS = []
 # ALLOWED_HOSTS = ['*']
@@ -84,11 +91,11 @@ WSGI_APPLICATION = "myshopproject.wsgi.application"
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
-        "NAME": "myshopproject",
-        "USER": "postgres",
-        "PASSWORD": "0123456789",
-        "HOST": "127.0.0.1",
-        "POST": "5432",
+        "NAME": env("POSTGRES_DB", default="myshopproject"),
+        "USER": env("POSTGRES_USER", default="postgres"),
+        "PASSWORD": env("POSTGRES_PASSWORD", default=""),
+        "HOST": env("POSTGRES_HOST", default="127.0.0.1"),
+        "PORT": env("POSTGRES_PORT", default="5432"),
     }
 }
 
@@ -156,9 +163,8 @@ LOGOUT_REDIRECT_URL = "auth:login"
 
 
 # Celery settings
-CELERY_BROKER_URL = "redis://localhost:6379"
-CELERY_RESULT_BACKEND = "redis://localhost:6379"
+CELERY_BROKER_URL = env("CELERY_BROKER_URL", default="redis://localhost:6379")
+CELERY_RESULT_BACKEND = env("CELERY_RESULT_BACKEND", default="redis://localhost:6379")
 
 # WKHTMLTOPDF SETTINGS
-# WKHTMLTOPDF_CMD = "/usr/local/bin/wkhtmltopdf"
-WKHTMLTOPDF_CMD = "C:\Program Files\wkhtmltopdf\bin\wkhtmltopdf.exe"
+WKHTMLTOPDF_CMD = env("WKHTMLTOPDF_CMD", default="wkhtmltopdf")

@@ -25,6 +25,7 @@ dependencies = [
     "pillow>=13.0.0",
     "pip>=26.2.2",
     "psycopg2>=2.9.13",
+    "python-dotenv>=1.0.0",
     "redis>=8.1.0",
     "weasyprint>=70.0",
     "whitenoise>=6.12.0",

@@ -165,6 +165,3 @@ LOGOUT_REDIRECT_URL = "auth:login"
 # Celery settings
 CELERY_BROKER_URL = env("CELERY_BROKER_URL", default="redis://localhost:6379")
 CELERY_RESULT_BACKEND = env("CELERY_RESULT_BACKEND", default="redis://localhost:6379")
-
-# WKHTMLTOPDF SETTINGS
-WKHTMLTOPDF_CMD = env("WKHTMLTOPDF_CMD", default="wkhtmltopdf")

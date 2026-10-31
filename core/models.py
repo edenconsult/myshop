@@ -1,4 +1,6 @@
 import uuid
+
+from django.contrib.postgres.indexes import GinIndex, OpClass
 from django.db import models
 
 # from django.contrib.auth import get_user_model
@@ -14,11 +16,23 @@ class Product(models.Model):
     cost = models.DecimalField(max_digits=10, decimal_places=2)
     price = models.DecimalField(max_digits=10, decimal_places=2)
     profit_rate = models.DecimalField(max_digits=3, decimal_places=2)
-    slug = models.SlugField(max_length=255)
+    # slugs are never queried, so skip the two indexes SlugField adds
+    slug = models.SlugField(max_length=255, db_index=False)
     created = models.DateTimeField(auto_now_add=True)
     updated = models.DateTimeField(auto_now=True)
 
     objects = models.Manager()
+
+    class Meta:
+        indexes = [
+            # the product list is paginated by newest first
+            models.Index(fields=["-created"], name="product_created_idx"),
+            # makes name__icontains (ILIKE '%term%') index-backed
+            GinIndex(
+                OpClass("name", name="gin_trgm_ops"),
+                name="product_name_trgm_idx",
+            ),
+        ]
 
     def __str__(self):
         return f"{self.name}"
@@ -27,7 +41,10 @@ class Product(models.Model):
 class Order(models.Model):
     id = models.UUIDField(primary_key=True, editable=False, default=uuid.uuid4)
     code = models.CharField(max_length=6)
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    # covered by the composite (user, created) index below
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, db_index=False
+    )
     customer_name = models.CharField(max_length=255, null=True, blank=True)
     overall_amount_paid = models.DecimalField(
         max_digits=10, decimal_places=2, default=0.00

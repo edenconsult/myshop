@@ -765,31 +765,35 @@ def retrive_reports_by_duration(request):
     if request.POST.get("duration") != "":
         duration = request.POST.get("duration")
     today = dt.date.today()
-    order_lists = []
+
+    # each duration gets a concrete [start, end) date range, which also
+    # feeds the "Download Reports" link in report.html
     if duration == "weekly":
-        this_week_number = today.isocalendar().week
-        this_year_number = today.year
-        week_start_date = dt.date.fromisocalendar(this_year_number, this_week_number, 1)
-        week_end_date = week_start_date + dt.timedelta(days=7)
-        week_start = dt.date(
-            year=today.year, month=today.month, day=week_start_date.day
+        week_start = dt.date.fromisocalendar(
+            today.isocalendar().year, today.isocalendar().week, 1
         )
-        week_end = dt.date(year=today.year, month=today.month, day=week_end_date.day)
-        order_lists = Order.objects.filter(created__range=(week_start, week_end))
-    elif duration == "monthly":
-        # month_start = dt.date(year=today.year, month=today.month, day=1)
-        # _, number_of_days = cal.monthrange(year=today.year, month=today.month)
-        # month_end = month_start + dt.timedelta(days=number_of_days - 1)
-        # print(month_start, month_end)
-        order_lists = Order.objects.filter(created__month=today.month)
-    elif duration == "yearly":
-        order_lists = Order.objects.filter(created__year=today.year)
-    else:
+        start_date = week_start
+        end_date = week_start + dt.timedelta(days=6)
         order_lists = Order.objects.filter(
-            created__day=today.day,
-            created__month=today.month,
-            created__year=today.year,
+            created__date__gte=start_date, created__date__lte=end_date
         )
+    elif duration == "monthly":
+        start_date = today.replace(day=1)
+        end_date = start_date + dt.timedelta(days=31)
+        end_date = end_date.replace(day=1) - dt.timedelta(days=1)
+        order_lists = Order.objects.filter(
+            created__date__gte=start_date, created__date__lte=end_date
+        )
+    elif duration == "yearly":
+        start_date = dt.date(year=today.year, month=1, day=1)
+        end_date = dt.date(year=today.year, month=12, day=31)
+        order_lists = Order.objects.filter(
+            created__date__gte=start_date, created__date__lte=end_date
+        )
+    else:
+        start_date = today
+        end_date = today
+        order_lists = Order.objects.filter(created__date=today)
 
     summary = generate_reports(order_lists)
     return render(
@@ -797,6 +801,9 @@ def retrive_reports_by_duration(request):
         "core/orders/report.html",
         {
             "summary": summary,
+            "start_date": start_date,
+            "end_date": end_date,
+            "users": "all",
         },
     )
 

@@ -1,5 +1,7 @@
 from celery import shared_task
 from celery_progress.backend import ProgressRecorder
+from django.db import connection
+
 from core.models import Order, Product
 
 
@@ -61,6 +63,12 @@ def import_products_task(self, rows: list[dict]):
             flush()
 
     flush()
+
+    # bulk_create does not update planner statistics; refresh them so the
+    # product list/search queries plan well immediately after an import
+    with connection.cursor() as cursor:
+        cursor.execute("ANALYZE core_product")
+
     return "Done"
 
 

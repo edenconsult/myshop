@@ -96,6 +96,9 @@ DATABASES = {
         "PASSWORD": env("POSTGRES_PASSWORD", default=""),
         "HOST": env("POSTGRES_HOST", default="127.0.0.1"),
         "PORT": env("POSTGRES_PORT", default="5432"),
+        # reuse connections between requests instead of reconnecting each time
+        "CONN_MAX_AGE": 60,
+        "CONN_HEALTH_CHECKS": True,
     }
 }
 

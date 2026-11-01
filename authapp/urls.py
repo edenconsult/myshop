@@ -9,6 +9,18 @@ app_name = 'auth'
 urlpatterns = [
     path('login/', views.signin, name="login"),
     path('login_success/', views.login_success, name="login_success"),
+    path('accounts/', views.accounts, name="accounts"),
+    path('accounts/create/', views.account_create, name="account-create"),
+    path(
+        'accounts/<uuid:account_id>/reset-password/',
+        views.account_reset_password,
+        name="account-reset-password",
+    ),
+    path(
+        'accounts/<uuid:account_id>/toggle-active/',
+        views.account_toggle_active,
+        name="account-toggle-active",
+    ),
     path('profile/', views.profile, name="profile"),
     path(
         'password/change/',

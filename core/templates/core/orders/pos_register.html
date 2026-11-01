@@ -16,14 +16,36 @@
        inc(item) { if (item.qty < item.stock) item.qty += 1 },
        dec(item) { if (item.qty > 1) item.qty -= 1 },
        remove(item) { this.items = this.items.filter(i => i.id !== item.id) },
-       clear() { this.items = [] },
+       clear() {
+         this.items = [];
+         this.cart_view = false;
+         this.settled = false;
+       },
+       cart_view: false,
+       settled: false,
+       show_cart() {
+         // The catalog lazy-loads below the fold, so scrolling to the cart would
+         // keep receding; hiding the grid brings it to the top instead.
+         this.cart_view = true;
+         if (!window.matchMedia('(min-width: 1024px)').matches) {
+           window.scrollTo({ top: 0, behavior: 'smooth' });
+         }
+       },
+       show_catalog() {
+         this.cart_view = false;
+         window.scrollTo({ top: 0, behavior: 'smooth' });
+       },
        checkout() {
          if (this.items.length === 0) return;
          const cart = this.items.map(i => ({
            id: i.id, name: i.name, stock: i.stock, qty: i.qty, price: i.price,
            total_price: this.money(i.price * i.qty),
          }));
-         htmx.ajax('POST', this.order_url, { target: '#cart', swap: 'innerHTML', values: { items: cart } });
+         htmx.ajax('POST', this.order_url, { target: '#cart', swap: 'innerHTML', values: { items: JSON.stringify(cart) } })
+           .then(() => {
+             this.settled = true;
+             this.show_cart();
+           });
        }
      }">
 
@@ -38,8 +60,8 @@
       <span class="hidden h-5 w-px bg-slate-200 dark:bg-slate-800 sm:block" aria-hidden="true"></span>
       <span class="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
         {% icon 'payments' 'text-[16px] text-emerald-600 dark:text-emerald-400' %}
-        <span>Today's Takings:</span>
-        <strong class="tnum text-sm font-semibold text-slate-900 dark:text-slate-100">GH₵ {{ today_takings|floatformat:2|intcomma }}</strong>
+        <span>{{ takings_label }}:</span>
+        <strong id="today-takings" class="tnum text-sm font-semibold text-slate-900 dark:text-slate-100">GH₵ {{ today_takings|floatformat:2|intcomma }}</strong>
       </span>
       <span class="hidden h-5 w-px bg-slate-200 dark:bg-slate-800 sm:block" aria-hidden="true"></span>
       <span class="tnum text-xs text-slate-500 dark:text-slate-400">{{ page_obj.paginator.count|intcomma }} products sellable</span>
@@ -60,7 +82,9 @@
   <div class="grid grid-cols-1 items-start gap-4 lg:grid-cols-12">
 
     {# ===== Left: catalog search + quick-pick grid ===== #}
-    <section class="flex flex-col gap-3 lg:col-span-7 xl:col-span-8" aria-label="Product catalog">
+    <section class="flex-col gap-3 lg:flex lg:col-span-7 xl:col-span-8"
+             :class="cart_view && items.length > 0 ? 'hidden' : 'flex'"
+             aria-label="Product catalog">
       <div class="rounded-xl border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-800 dark:bg-slate-900">
         <label class="sr-only" for="table-search">Search products</label>
         <div class="relative">
@@ -93,6 +117,47 @@
     <aside class="lg:sticky lg:top-20 lg:col-span-5 xl:col-span-4" aria-label="Customer cart">
       <div id="cart">{% include "core/orders/pos_cart_panel.html" %}</div>
     </aside>
+  </div>
+
+  {# ---------- Mobile cart bar: the panel below the grid is off-screen on phones ---------- #}
+  <div x-show="items.length > 0"
+       x-cloak
+       class="fixed inset-x-0 bottom-0 z-40 border-t border-slate-200 bg-white/95 px-3 py-2.5 backdrop-blur-md shadow-[0_-4px_20px_rgba(15,23,42,0.08)] transition-transform lg:hidden dark:border-slate-800 dark:bg-slate-900/95"
+       style="padding-bottom: max(0.625rem, env(safe-area-inset-bottom))">
+    <div class="flex items-center gap-2">
+      <button type="button"
+              x-show="!cart_view"
+              x-cloak
+              @click="show_cart()"
+              class="flex min-h-[44px] flex-1 items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 text-left dark:border-slate-800 dark:bg-slate-950/60">
+        <span class="flex min-w-0 flex-col">
+          <span class="text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">In cart</span>
+          <span class="truncate text-sm font-semibold text-slate-900 dark:text-slate-100">
+            <span class="tnum" x-text="units() + ' unit' + (units() === 1 ? '' : 's') + ' · ' + items.length + ' line' + (items.length === 1 ? '' : 's')"></span>
+          </span>
+        </span>
+        <span class="flex shrink-0 items-center gap-1">
+          <span class="tnum text-sm font-bold text-emerald-700 dark:text-emerald-400">GH₵ <span x-text="subtotal()"></span></span>
+          {% icon 'chevron_right' 'text-[18px] text-slate-400 dark:text-slate-500' %}
+        </span>
+      </button>
+      <button type="button"
+              x-show="cart_view"
+              x-cloak
+              @click="show_catalog()"
+              class="flex min-h-[44px] flex-1 items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-semibold text-slate-900 dark:border-slate-800 dark:bg-slate-950/60 dark:text-slate-100">
+        {% icon 'arrow_back' 'text-[18px] text-slate-400 dark:text-slate-500' %}
+        <span>Back to products</span>
+      </button>
+      <button type="button"
+              x-show="!settled"
+              x-cloak
+              @click="checkout()"
+              class="flex min-h-[44px] shrink-0 items-center justify-center gap-1.5 rounded-xl bg-emerald-600 px-4 text-sm font-bold text-white shadow-sm active:scale-[0.99] dark:bg-emerald-500 dark:text-slate-950">
+        {% icon 'check_circle' 'text-[20px]' %}
+        <span>Pay</span>
+      </button>
+    </div>
   </div>
 
   <script>

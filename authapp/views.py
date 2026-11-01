@@ -1,18 +1,94 @@
-from django.shortcuts import render, redirect
+from django.shortcuts import get_object_or_404, render, redirect
 from django.contrib.auth import authenticate, get_user_model, login, logout
 from django.contrib.auth.decorators import login_required, user_passes_test
-from django.http import HttpResponse
+from django.http import HttpResponse, HttpResponseForbidden
 from django.urls import reverse
-from authapp.forms import ProfileForm
-from utils import is_admin
+from django.utils.http import urlencode
+from django.views.decorators.http import require_POST
+from authapp.forms import AccountSetPasswordForm, NewAccountForm, ProfileForm
+from utils import can_ring_up, is_admin
+
+
+def _accounts_context(request):
+    model = get_user_model()
+    context = {
+        "accounts": model.objects.order_by("-date_joined"),
+        "create_form": NewAccountForm(),
+        "reset_form": AccountSetPasswordForm(),
+        "flash_created": request.GET.get("created"),
+        "flash_reset": request.GET.get("reset"),
+    }
+    # after a rejected reset the dialog reopens on the same row, so its POST
+    # target must survive the re-render
+    reset_open = request.GET.get("reset_open")
+    if reset_open:
+        target_pk = (
+            model.objects.filter(username=reset_open).values_list("pk", flat=True).first()
+        )
+        if target_pk is not None:
+            context["reset_open"] = reset_open
+            context["reset_action_pk"] = target_pk
+    return context
+
+
+@login_required
+@user_passes_test(is_admin)
+def accounts(request):
+    """Owner-only roster: everyone who can sign in, newest first."""
+    return render(request, "authapp/accounts.html", _accounts_context(request))
+
+
+@require_POST
+@login_required
+@user_passes_test(is_admin)
+def account_create(request):
+    form = NewAccountForm(request.POST)
+    if not form.is_valid():
+        context = _accounts_context(request)
+        context["create_form"] = form
+        return render(request, "authapp/accounts.html", context)
+    account = form.save()
+    return redirect(f"{reverse('auth:accounts')}?{urlencode({'created': account.username})}")
+
+
+@require_POST
+@login_required
+@user_passes_test(is_admin)
+def account_reset_password(request, account_id):
+    account = get_object_or_404(get_user_model(), id=account_id)
+    # the owner's own password stays under auth:password_change, where the old
+    # password is verified and the session is re-hashed
+    if account.pk == request.user.pk:
+        return HttpResponseForbidden("Use Change password for your own account.")
+
+    form = AccountSetPasswordForm(request.POST)
+    if not form.is_valid():
+        # request.GET still carries ?reset_open=<username>, which reopens the
+        # dialog on the same row via _accounts_context
+        context = _accounts_context(request)
+        context["reset_form"] = form
+        return render(request, "authapp/accounts.html", context)
+    account.set_password(form.cleaned_data["new_password1"])
+    account.save()
+    return redirect(f"{reverse('auth:accounts')}?{urlencode({'reset': account.username})}")
+
+
+@require_POST
+@login_required
+@user_passes_test(is_admin)
+def account_toggle_active(request, account_id):
+    account = get_object_or_404(get_user_model(), id=account_id)
+    if account.pk == request.user.pk:
+        return HttpResponseForbidden("You cannot deactivate your own account.")
+    account.is_active = not account.is_active
+    account.save(update_fields=["is_active"])
+    return redirect(reverse("auth:accounts"))
 
 
 def signin(request):
     """Signin"""
-    if request.user.is_authenticated and request.user.user_type == 'ADMIN':
+    if request.user.is_authenticated and can_ring_up(request.user):
         return redirect('core:base')
-    elif request.user.is_authenticated and request.user.user_type == 'SALEPERSON':
-        return redirect('sales:base')
 
     validations: dict[str, str | bool] = {}
     if request.method == "POST":
@@ -55,12 +131,9 @@ def signin(request):
 
 @login_required
 def login_success(request):
-    if request.user.user_type == "ADMIN":
+    if can_ring_up(request.user):
         return redirect("core:base")
-    elif request.user.user_type == "SALEPERSON":
-        return redirect("sales:base")
-    else:
-        return HttpResponse(b"Unauthorized Access.")
+    return HttpResponse(b"Unauthorized Access.")
 
 
 @login_required

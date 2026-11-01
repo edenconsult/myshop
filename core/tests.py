@@ -8,6 +8,7 @@ from datetime import timedelta
 from decimal import Decimal
 from io import BytesIO
 from unittest import mock
+from uuid import uuid4
 
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
@@ -17,7 +18,7 @@ from PIL import Image
 
 from authapp.models import Account
 from core.models import Order, OrderItem, Product, ProductCategory
-from core.views import report_context, report_range
+from core.views import receipt_sheet_length_mm, report_context, report_range
 
 
 def png_upload(name="glow.png", width=8, height=8):
@@ -994,3 +995,426 @@ class LedgerSelectionStateTests(LedgerTestCase):
         self.assertIsNotNone(scope, "the ledger page renders no selection scope")
         self.assertIn("toggleAllCheckboxes", scope.group(1))
         self.assertNotIn('"', scope.group(1))
+
+
+RECEIPT_COMPANY = {
+    "name": "Noble Cosmetics Ltd.",
+    "location": "Atebubu Bayere Bode Junction",
+    "phone": "+233 24 833 1063",
+    "email": "orders@noble.example",
+    "footer": "Goods sold are not returnable. Thank you for your patronage!",
+}
+
+
+class ThermalReceiptTests(LedgerTestCase):
+    """The POS receipt prints on an 80mm thermal roll: company block comes
+    from settings, the page is roll-width, and a blank email drops its line."""
+
+    def setUp(self):
+        super().setUp()
+        self.order = self.make_order(
+            "RCP01", self.admin, [(self.elixir, 2), (self.lipstick, 1)]
+        )
+        self.url = reverse("core:print-order-pdf", args=(self.order.id, 1))
+
+    def captured_receipt_html(self):
+        """Render the view with WeasyPrint's HTML class stubbed, returning the
+        document the view fed it and the stylesheet paths attached to it."""
+        import utils
+
+        with (
+            mock.patch("utils.HTML") as html_cls,
+            mock.patch("utils.CSS", wraps=utils.CSS) as css_spy,
+        ):
+            html_cls.return_value.write_pdf.return_value = b"%PDF-test"
+            response = self.client.get(self.url)
+
+        self.css_spy = css_spy
+        self.assertEqual(response["Content-Type"], "application/pdf")
+        # the computed roll size arrives as a CSS(string=...), no filename
+        sheets = [call.kwargs.get("filename", "") for call in css_spy.call_args_list]
+        return html_cls.call_args.kwargs["string"], sheets
+
+    @override_settings(COMPANY_INFO=RECEIPT_COMPANY)
+    def test_receipt_carries_the_settings_company_block(self):
+        html, sheets = self.captured_receipt_html()
+
+        for needle in RECEIPT_COMPANY.values():
+            self.assertIn(needle, html)
+        self.assertIn(self.order.code, html)
+        self.assertTrue(
+            any(s.endswith("receipt.css") for s in sheets),
+            f"no receipt stylesheet among {sheets}",
+        )
+        self.assertTrue(
+            any("size: 80mm" in call.kwargs.get("string", "") for call in self.css_spy.call_args_list),
+            "the view never sent a computed roll size",
+        )
+
+    @override_settings(COMPANY_INFO={**RECEIPT_COMPANY, "email": ""})
+    def test_blank_email_drops_its_line(self):
+        html, _ = self.captured_receipt_html()
+
+        self.assertNotIn("orders@noble.example", html)
+        self.assertNotIn("Email", html)
+
+    @override_settings(COMPANY_INFO=RECEIPT_COMPANY)
+    def test_sheet_length_clamps_and_grows_per_wrapped_line(self):
+        empty = self.make_order("RSL00", self.admin, [])
+        one = self.make_order("RSL01", self.admin, [(self.elixir, 1)])
+        two = self.make_order("RSL02", self.admin, [(self.elixir, 1), (self.lipstick, 1)])
+
+        # both fixture names fit the Item column on one line
+        self.assertEqual(receipt_sheet_length_mm(empty, RECEIPT_COMPANY), 80.0)
+        self.assertAlmostEqual(
+            receipt_sheet_length_mm(two, RECEIPT_COMPANY) - receipt_sheet_length_mm(one, RECEIPT_COMPANY),
+            5.4,
+        )
+
+    @override_settings(COMPANY_INFO=RECEIPT_COMPANY)
+    def test_receipt_pages_are_80mm_wide(self):
+        """Real WeasyPrint render: the page box must be the roll width, not A4.
+        The page dicts hide in flate-compressed object streams, so the PDF's
+        streams are unpacked before the MediaBox is searched."""
+        import zlib
+
+        response = self.client.get(self.url)
+        self.assertEqual(response["Content-Type"], "application/pdf")
+
+        widths = []
+        for chunk in re.findall(rb"stream\r?\n(.*?)endstream", response.content, re.S):
+            try:
+                raw = zlib.decompress(chunk)
+            except zlib.error:
+                continue
+            widths += [
+                float(w)
+                for w in re.findall(rb"/MediaBox\s*\[\s*0\s+0\s+([\d.]+)", raw)
+            ]
+
+        self.assertTrue(widths, "no MediaBox found to verify page width")
+        for width in widths:
+            self.assertAlmostEqual(width * 25.4 / 72, 80.0, delta=0.6)
+
+
+class PosCheckoutTests(LedgerTestCase):
+    """The register posts the whole cart as one JSON array in ``items``.
+
+    htmx 2 cannot carry an array of objects as repeated parameters, so the
+    client serialises the cart itself and the view reads a single parameter.
+    """
+
+    def post_cart(self, cart):
+        return self.client.post(reverse("core:make-order"), {"items": json.dumps(cart)})
+
+    def test_cart_lines_create_order_and_draw_down_stock(self):
+        response = self.post_cart(
+            [
+                {"id": str(self.elixir.pk), "qty": 2, "total_price": "280.00"},
+                {"id": str(self.lipstick.pk), "qty": 1, "total_price": "105.00"},
+            ]
+        )
+
+        order = Order.objects.get(user=self.admin)
+        lines = OrderItem.objects.filter(order=order)
+        self.assertContains(response, order.code)
+        self.assertEqual(list(lines.order_by("product__name").values_list("qty_bought", flat=True)), [2, 1])
+        self.assertEqual(order.overall_amount_paid, Decimal("385.00"))
+        self.assertEqual(Product.objects.get(pk=self.elixir.pk).stock, 48)
+        self.assertEqual(Product.objects.get(pk=self.lipstick.pk).stock, 49)
+
+    def test_empty_cart_is_refused(self):
+        response = self.post_cart([])
+
+        self.assertContains(response, "No items in the cart")
+        self.assertEqual(Order.objects.count(), 0)
+
+    def test_quantity_beyond_stock_is_refused(self):
+        response = self.post_cart(
+            [{"id": str(self.elixir.pk), "qty": 99, "total_price": "13860.00"}]
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(Order.objects.count(), 0)
+        self.assertEqual(Product.objects.get(pk=self.elixir.pk).stock, 50)
+
+    def test_unreadable_cart_is_logged_and_not_reported_as_retryable(self):
+        """What htmx 2 used to send — ``[object Object]`` — is not JSON at all.
+        The cashier needs to reload the register, not retry the same sale."""
+        with self.assertLogs("core.views", level="ERROR") as captured:
+            response = self.client.post(
+                reverse("core:make-order"), {"items": "[object Object]"}
+            )
+
+        body = response.content.decode()
+        self.assertEqual(Order.objects.count(), 0)
+        self.assertContains(response, "could not be read")
+        self.assertNotIn("Try again at a later time", body)
+        self.assertTrue(
+            any("object Object" in line for line in captured.output),
+            f"the log never recorded the cart it rejected: {captured.output}",
+        )
+
+    def test_cart_of_json_scalars_is_refused(self):
+        """A well-formed array of strings would sail past json.loads and blow up
+        on the first ``item.get``."""
+        response = self.post_cart(["Hydrating Glow Elixir", 42])
+
+        self.assertEqual(Order.objects.count(), 0)
+        self.assertContains(response, "could not be read")
+
+    def test_a_settled_sale_pushes_the_new_takings_to_the_status_bar(self):
+        self.make_order("PRE001", self.admin, [(self.lipstick, 1)])  # 105.00 today
+
+        response = self.post_cart(
+            [{"id": str(self.elixir.pk), "qty": 2, "total_price": "280.00"}]
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.content.decode()
+        self.assertIn('hx-swap-oob="true"', body)
+        self.assertIn('id="today-takings"', body)
+        self.assertIn("385.00", body)
+
+    def test_a_rejected_cart_leaves_the_takings_alone(self):
+        self.make_order("PRE002", self.admin, [(self.lipstick, 1)])
+
+        response = self.post_cart([])
+
+        body = response.content.decode()
+        self.assertNotIn("hx-swap-oob", body)
+        self.assertNotIn("today-takings", body)
+
+
+class CashierRegisterAccessTests(LedgerTestCase):
+    """A cashier is handed the owner's register and nothing else in the hub.
+
+    The register is the one surface both roles share, so its endpoints open to
+    the cashier deliberately; every other hub route keeps turning them away.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.rep = Account.objects.create_user(
+            username="ama", password="pw", user_type="SALEPERSON"
+        )
+        self.other_rep = Account.objects.create_user(
+            username="kojo", password="pw", user_type="SALEPERSON"
+        )
+
+    def login_as_cashier(self):
+        self.client.force_login(self.rep)
+
+    def test_a_cashier_lands_on_the_register_at_root(self):
+        self.login_as_cashier()
+
+        response = self.client.get(reverse("core:base"))
+
+        body = response.content.decode()
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, "core/orders/pos_register.html")
+        for phrase in ("Register Open", "Customer Cart", "Complete Sale"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, body)
+
+    def test_the_cashiers_landing_page_carries_no_owner_section(self):
+        self.login_as_cashier()
+
+        body = self.client.get(reverse("core:base")).content.decode()
+
+        # the nav labels are asserted as rendered link text: the brand line is
+        # "Store Central Hub" for every role and must not trip this up.
+        for phrase in (
+            "<span>Central Hub</span>",
+            "<span>Products &amp; Stock</span>",
+            "<span>Orders</span>",
+            "<span>Sales Reports</span>",
+            "Daily Takings",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertNotIn(phrase, body)
+
+    def test_the_owner_still_lands_on_the_dashboard_at_root(self):
+        response = self.client.get(reverse("core:base"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, "core/index.html")
+        self.assertNotTemplateUsed(response, "core/orders/pos_register.html")
+
+    def test_a_cashier_reaches_every_endpoint_the_register_needs(self):
+        self.login_as_cashier()
+
+        for url in (
+            reverse("core:orders-products"),
+            reverse("core:load-orders-products"),
+            reverse("core:shop-cart"),
+        ):
+            with self.subTest(url=url):
+                self.assertEqual(self.client.get(url).status_code, 200)
+
+    def test_a_cashier_rings_up_a_sale(self):
+        self.login_as_cashier()
+
+        response = self.client.post(
+            reverse("core:make-order"),
+            {
+                "items": json.dumps(
+                    [{"id": str(self.elixir.pk), "qty": 1, "total_price": "140.00"}]
+                )
+            },
+        )
+
+        order = Order.objects.get(user=self.rep)
+        self.assertContains(response, order.code)
+        self.assertEqual(Product.objects.get(pk=self.elixir.pk).stock, 49)
+
+    def test_a_cashier_is_turned_away_from_every_owner_surface(self):
+        self.login_as_cashier()
+
+        for url in (
+            reverse("core:products"),
+            reverse("core:products-summary"),
+            reverse("core:load-products"),
+            reverse("core:add-product"),
+            reverse("core:import-products"),
+            reverse("core:remove-products-question"),
+            reverse("core:orders"),
+            reverse("core:today-orders"),
+            reverse("core:orders-ledger"),
+            reverse("core:orders-export-csv"),
+            reverse("core:sales-report"),
+            reverse("core:sales-report-ledger"),
+            reverse("core:sales-report-csv"),
+            reverse("core:sales-report-pdf"),
+            reverse("auth:accounts"),
+        ):
+            for method in ("get", "post"):
+                with self.subTest(url=url, method=method):
+                    response = getattr(self.client, method)(url)
+                    self.assertEqual(response.status_code, 302)
+
+    def test_the_tabbed_orders_shell_stays_closed_to_a_cashier(self):
+        """The cashier gets the register at /, not the screen whose tabs also
+        carry the ledger and the reports."""
+        self.login_as_cashier()
+
+        response = self.client.get(reverse("core:orders"), {"view": "pos"})
+
+        self.assertEqual(response.status_code, 302)
+
+
+class CashierTakingsTests(LedgerTestCase):
+    """The status bar shows a cashier their own money and the owner the store's."""
+
+    def setUp(self):
+        super().setUp()
+        self.rep = Account.objects.create_user(
+            username="ama", password="pw", user_type="SALEPERSON"
+        )
+        self.make_order("MINE0001", self.rep, [(self.lipstick, 1)])  # 105.00
+        self.make_order("MINE0002", self.rep, [(self.lipstick, 1)])  # 105.00
+        self.make_order("OTHER001", self.admin, [(self.elixir, 1)])  # 140.00
+
+    def test_a_cashier_reads_only_their_own_takings(self):
+        self.client.force_login(self.rep)
+
+        body = self.client.get(reverse("core:orders-products")).content.decode()
+
+        self.assertIn("Your Takings:", body)
+        self.assertIn("210.00", body)
+        self.assertNotIn("350.00", body)
+
+    def test_a_settled_cashier_sale_refreshes_their_own_figure(self):
+        self.client.force_login(self.rep)
+
+        response = self.client.post(
+            reverse("core:make-order"),
+            {
+                "items": json.dumps(
+                    [{"id": str(self.lipstick.pk), "qty": 1, "total_price": "105.00"}]
+                )
+            },
+        )
+
+        self.assertIn("315.00", response.content.decode())
+
+    def test_the_owner_reads_the_store_s_takings(self):
+        body = self.client.get(reverse("core:orders-products")).content.decode()
+
+        self.assertIn("Today's Takings:", body)
+        self.assertIn("350.00", body)
+
+
+class CashierReceiptTests(LedgerTestCase):
+    """The receipt the register hands over opens for the cashier who rang it up,
+    and for nobody else's."""
+
+    def setUp(self):
+        super().setUp()
+        self.rep = Account.objects.create_user(
+            username="ama", password="pw", user_type="SALEPERSON"
+        )
+        self.other_rep = Account.objects.create_user(
+            username="kojo", password="pw", user_type="SALEPERSON"
+        )
+
+    def receipt_urls(self, order_id):
+        return [
+            reverse("core:view-order", args=[order_id, 1]),
+            reverse("core:print-order-pdf", args=[order_id, 1]),
+        ]
+
+    def test_the_register_links_the_cashier_to_their_own_receipt(self):
+        self.client.force_login(self.rep)
+
+        response = self.client.post(
+            reverse("core:make-order"),
+            {
+                "items": json.dumps(
+                    [{"id": str(self.elixir.pk), "qty": 1, "total_price": "140.00"}]
+                )
+            },
+        )
+
+        order = Order.objects.get(user=self.rep)
+        self.assertContains(response, self.receipt_urls(order.id)[1])
+
+    def test_a_cashier_opens_their_own_receipt(self):
+        mine = self.make_order("MINE0001", self.rep, [(self.elixir, 1)])
+        self.client.force_login(self.rep)
+
+        for url in self.receipt_urls(mine.id):
+            with self.subTest(url=url):
+                self.assertEqual(self.client.get(url).status_code, 200)
+
+    def test_a_cashier_cannot_open_another_cashiers_receipt(self):
+        theirs = self.make_order("THEIRS01", self.other_rep, [(self.elixir, 1)])
+        self.client.force_login(self.rep)
+
+        for url in self.receipt_urls(theirs.id):
+            with self.subTest(url=url):
+                self.assertEqual(self.client.get(url).status_code, 404)
+
+    def test_a_cashier_cannot_open_the_owner_s_receipt(self):
+        boss_order = self.make_order("BOSS0001", self.admin, [(self.elixir, 1)])
+        self.client.force_login(self.rep)
+
+        for url in self.receipt_urls(boss_order.id):
+            with self.subTest(url=url):
+                self.assertEqual(self.client.get(url).status_code, 404)
+
+    def test_the_owner_opens_any_receipt(self):
+        theirs = self.make_order("THEIRS02", self.other_rep, [(self.elixir, 1)])
+
+        for url in self.receipt_urls(theirs.id):
+            with self.subTest(url=url):
+                self.assertEqual(self.client.get(url).status_code, 200)
+
+    def test_an_unknown_receipt_is_not_a_server_error(self):
+        missing = uuid4()
+        self.client.force_login(self.rep)
+
+        for url in self.receipt_urls(missing):
+            with self.subTest(url=url):
+                self.assertEqual(self.client.get(url).status_code, 404)
+

@@ -1,0 +1,6 @@
+{% load humanize %}
+{% if order %}
+  {# The checkout response swaps into #cart, so the takings chip is carried here out-of-band. #}
+  <span id="today-takings" class="tnum text-sm font-semibold text-slate-900 dark:text-slate-100"
+        hx-swap-oob="true">GH₵ {{ today_takings|floatformat:2|intcomma }}</span>
+{% endif %}

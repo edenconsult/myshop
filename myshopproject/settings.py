@@ -49,7 +49,6 @@ INSTALLED_APPS = [
     "compressor",
     "authapp",
     "core",
-    "sales",
     "celery_progress",
     "wkhtmltopdf",
 ]
@@ -175,3 +174,13 @@ LOGOUT_REDIRECT_URL = "auth:login"
 # Celery settings
 CELERY_BROKER_URL = env("CELERY_BROKER_URL", default="redis://127.0.0.1:6379")
 CELERY_RESULT_BACKEND = env("CELERY_RESULT_BACKEND", default="redis://127.0.0.1:6379")
+
+# Printed documents (receipts, reports) read their company block from here.
+# Empty email/footer simply drop their line from the printout.
+COMPANY_INFO = {
+    "name": env("COMPANY_NAME", default="Noble Cosmetics Ltd."),
+    "location": env("COMPANY_LOCATION", default="Atebubu Bayere Bode Junction"),
+    "phone": env("COMPANY_PHONE", default="+233 24 833 1063"),
+    "email": env("COMPANY_EMAIL", default=""),
+    "footer": env("COMPANY_FOOTER", default="Goods sold are not returnable. Thank you for your patronage!"),
+}

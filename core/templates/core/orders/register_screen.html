@@ -1,0 +1,12 @@
+{% extends "core/_core_base.html" %}
+{% block title %}
+  Point of Sale
+  |
+{% endblock title %}
+{% block main_class %}
+  mx-auto flex w-full max-w-[1700px] flex-col gap-4 px-3 pb-10 pt-20 sm:px-5 lg:px-8
+{% endblock main_class %}
+{% block content %}
+  {# The register owns the whole viewport, so it ships inline rather than behind a tab. #}
+  {% include "core/orders/pos_register.html" %}
+{% endblock content %}

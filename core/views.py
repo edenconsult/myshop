@@ -18,8 +18,9 @@ from decimal import Decimal
 
 from authapp.models import Account
 from .models import Product, ProductCategory, Order, OrderItem
-from utils import generate_code, is_admin, render_attached_pdf
+from utils import can_ring_up, generate_code, is_admin, parse_cart, render_attached_pdf
 import io
+import logging
 from .tasks import (
     PROFIT_RATE_MAX,
     import_products_task,
@@ -31,12 +32,15 @@ import csv
 from django.core.paginator import Paginator
 from django.db.models import Q
 from .forms import ProductCreationForm
-import json
+import math
 import datetime as dt
+from django.conf import settings
 from django.utils import timezone
 from django.db.models import QuerySet
 from django_htmx.http import trigger_client_event
 from django.views.decorators.http import require_GET, require_POST
+
+logger = logging.getLogger(__name__)
 
 # the register grid is 2/3/4 columns wide, so a page fills every column
 POS_PAGE_SIZE = 12
@@ -77,8 +81,13 @@ LEDGER_STATUSES = {"all", "in_stock", "low", "out_of_stock", "alert"}
 
 
 @login_required
-@user_passes_test(is_admin)
+@user_passes_test(can_ring_up)
 def index(request):
+    if not is_admin(request.user):
+        return render(
+            request, "core/orders/register_screen.html", register_context(request)
+        )
+
     today = timezone.localdate()
     yesterday = today - dt.timedelta(days=1)
 
@@ -901,29 +910,36 @@ def products_summary(request):
     return render(request, "core/products/summary.html", context)
 
 
-@login_required
-@user_passes_test(is_admin)
-def orders_products(request):
+def todays_takings(user=None):
+    """Gross takings booked today, shared by the register header and the
+    post-checkout refresh. A cashier reads their own figure, not the store's."""
+    orders = Order.objects.filter(created__date=timezone.localdate())
+    if user is not None:
+        orders = orders.filter(user=user)
+    return orders.aggregate(total=Sum("overall_amount_paid"))["total"] or Decimal("0.00")
+
+
+def register_context(request):
+    """The register both roles share. Everything owner-only -- cost, margin,
+    the ledger, other people's sales -- stays out of this context."""
     products = Product.objects.filter(Q(stock__gt=0)).order_by("name")
-
-    paginator = Paginator(products, POS_PAGE_SIZE)
-
-    page_obj = paginator.get_page(1)
-    today_takings = (
-        Order.objects.filter(created__date=timezone.localdate()).aggregate(
-            total=Sum("overall_amount_paid")
-        )["total"]
-        or Decimal("0.00")
-    )
-    context = {
+    page_obj = Paginator(products, POS_PAGE_SIZE).get_page(1)
+    cashier = None if is_admin(request.user) else request.user
+    return {
         "page_obj": page_obj,
-        "today_takings": today_takings,
+        "today_takings": todays_takings(cashier),
+        "takings_label": "Today's Takings" if cashier is None else "Your Takings",
     }
-    return render(request, "core/orders/pos_register.html", context)
 
 
 @login_required
-@user_passes_test(is_admin)
+@user_passes_test(can_ring_up)
+def orders_products(request):
+    return render(request, "core/orders/pos_register.html", register_context(request))
+
+
+@login_required
+@user_passes_test(can_ring_up)
 def load_orders_products(request):
     products = Product.objects.filter(Q(stock__gt=0)).order_by("name")
 
@@ -949,9 +965,22 @@ def load_orders_products(request):
 
 @require_POST
 @login_required
-@user_passes_test(is_admin)  # type: ignore
+@user_passes_test(can_ring_up)
 def make_order(request):
-    items = [json.loads(item) for item in request.POST.getlist("items")]
+    raw_cart = request.POST.get("items")
+    items = parse_cart(raw_cart)
+
+    if items is None:
+        logger.error(
+            "make_order got a cart that is not a JSON array of lines for user %s: %r",
+            request.user.pk,
+            raw_cart,
+        )
+        message = (
+            "The cart could not be read. Reload the register and run the sale again."
+        )
+        context = {"type": "danger", "message": message}
+        return render(request, "core/orders/order_made.html", context)
 
     if len(items) == 0:
         msg_type = "danger"
@@ -1002,7 +1031,7 @@ def make_order(request):
                 new_order_items.append({"product": product, "item": item, "qty": qty})
 
             if len(items) != len(new_order_items):
-                raise ValueError("Order validation failed")
+                raise ValueError(f"Order validation failed: {order_errors}")
 
             # create new order
             order_obj = Order.objects.create(
@@ -1036,12 +1065,14 @@ def make_order(request):
             order_obj.save(update_fields=["overall_amount_paid", "updated"])
     except ValueError:
         # one or more items failed validation, nothing was saved
+        logger.exception("make_order rejected the cart for user %s", request.user.pk)
         message = "Something went wrong. Your order could not be initiated."
         msg_type = "danger"
         context = {"type": msg_type, "message": message}
         return render(request, "core/orders/order_made.html", context)
     except Exception:
         # if anything goes wrong, all changes will be reversed.
+        logger.exception("make_order failed for user %s", request.user.pk)
         message = "Your order was not successfully. Try again at a later time."
         msg_type = "danger"
         context = {"type": msg_type, "message": message}
@@ -1062,18 +1093,20 @@ def make_order(request):
     ).count()
     message = f"Order Number {order_obj.code} totaling GHs {order_obj.overall_amount_paid:.2f} was successful. Thank you."  # noqa: E501
     msg_type = "success"
+    cashier = None if is_admin(request.user) else request.user
     context = {
         "type": msg_type,
         "message": message,
         "order": order_obj,
         "order_number": order_number,
+        "today_takings": todays_takings(cashier),
     }
     response = render(request, "core/orders/order_made.html", context)
     return trigger_client_event(response, "reload_products_with_stocks")
 
 
 @login_required
-@user_passes_test(is_admin)
+@user_passes_test(can_ring_up)
 def shop_cart(request):
     return render(request, "core/orders/pos_cart_panel.html")
 
@@ -1174,25 +1207,42 @@ def print_todays_orders(request, date, users):
 
 
 @login_required
-@user_passes_test(is_admin)
+@user_passes_test(can_ring_up)
 def view_order(request, order_id, order_number):
-    order = get_object_or_404(
-        Order.objects.prefetch_related(
-            Prefetch(
-                "orderitem_set",
-                queryset=OrderItem.objects.select_related("product"),
-            )
-        ),
-        id=order_id,
-    )
+    order = get_receipt(request, order_id)
     context = {"order": order, "order_number": order_number}
     return render(request, "core/orders/order_details.html", context)
 
 
+def receipt_sheet_length_mm(order, company):
+    """WeasyPrint refuses content-sized pages, so size the 80mm sheet by hand.
+    The 74mm base is measured (binary-searched minimum one-page height of the
+    probe receipts: furniture, rules, footer), plus 5.4mm per wrapped text
+    line — a 4.6mm 9pt line with row padding — and a line each for the
+    optional email and customer rows."""
+    items = order.orderitem_set.select_related("product")
+    name_lines = sum(max(1, math.ceil(len(i.product.name) / 26)) for i in items)
+    extra = (4 if company["email"] else 0) + (4 if order.customer_name else 0)
+    return max(80.0, round(74 + name_lines * 5.4 + extra, 1))
+
+
+def get_receipt(request, order_id):
+    """The owner reads any receipt; a cashier reads only the ones they rang up."""
+    receipts = Order.objects.prefetch_related(
+        Prefetch(
+            "orderitem_set",
+            queryset=OrderItem.objects.select_related("product"),
+        )
+    )
+    if not is_admin(request.user):
+        receipts = receipts.filter(user=request.user)
+    return get_object_or_404(receipts, id=order_id)
+
+
 @login_required
-@user_passes_test(is_admin)
+@user_passes_test(can_ring_up)
 def print_order_pdf(request, order_id, order_number):
-    order = Order.objects.get(id=order_id)
+    order = get_receipt(request, order_id)
     context = {"order": order, "order_number": order_number}
     today = dt.datetime.now()
     todays_date = f"{today:%d%m%Y%H%M%S}"
@@ -1201,6 +1251,8 @@ def print_order_pdf(request, order_id, order_number):
         relative_template_path="core/orders/prints/order_details.html",
         context=context,
         file_name=filename,
+        css=["css/receipt.css"],
+        page_size_mm=(80, receipt_sheet_length_mm(order, settings.COMPANY_INFO)),
     )
     return pdf
 

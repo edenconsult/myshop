@@ -1,5 +1,5 @@
 {% load icons %}
-{% with url_name=request.resolver_match.url_name namespace=request.resolver_match.namespace view=request.GET.view %}
+{% with url_name=request.resolver_match.url_name namespace=request.resolver_match.namespace view=request.GET.view role=request.user.user_type %}
   <header class="fixed inset-x-0 top-0 z-50 border-b border-slate-200 bg-slate-50/90 backdrop-blur-md dark:border-slate-800 dark:bg-slate-950/90">
     <div class="mx-auto flex h-16 w-full max-w-7xl items-center justify-between gap-2 px-3 sm:gap-4 sm:px-5 lg:px-8">
       <div class="flex min-w-0 items-center gap-3 xl:gap-6">
@@ -20,39 +20,43 @@
           </span>
         </a>
 
-        <!-- Desktop route navigation -->
+        <!-- Desktop route navigation: the register is the only section a cashier gets -->
         <nav class="hidden items-center gap-0.5 md:flex lg:gap-1" aria-label="Primary navigation">
-          <a href="{% url 'core:base' %}"
-             {% if namespace == 'core' and url_name == 'base' %}aria-current="page"{% endif %}
-             class="flex items-center gap-1.5 whitespace-nowrap rounded-lg px-2 py-2 text-[10px] font-semibold transition-colors lg:px-2.5 lg:text-xs xl:px-3 xl:text-sm {% if namespace == 'core' and url_name == 'base' %}bg-emerald-600 text-white dark:bg-emerald-500 dark:text-slate-950{% else %}text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800/60 dark:hover:text-slate-100{% endif %}">
-            {% icon 'hub' 'hidden text-[18px] xl:inline' %}
-            <span>Central Hub</span>
-          </a>
-          <a href="{% url 'core:orders' %}?view=pos"
+          {% if role == 'ADMIN' %}
+            <a href="{% url 'core:base' %}"
+               {% if namespace == 'core' and url_name == 'base' %}aria-current="page"{% endif %}
+               class="flex items-center gap-1.5 whitespace-nowrap rounded-lg px-2 py-2 text-[10px] font-semibold transition-colors lg:px-2.5 lg:text-xs xl:px-3 xl:text-sm {% if namespace == 'core' and url_name == 'base' %}bg-emerald-600 text-white dark:bg-emerald-500 dark:text-slate-950{% else %}text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800/60 dark:hover:text-slate-100{% endif %}">
+              {% icon 'hub' 'hidden text-[18px] xl:inline' %}
+              <span>Central Hub</span>
+            </a>
+          {% endif %}
+          <a href="{% if role == 'ADMIN' %}{% url 'core:orders' %}?view=pos{% else %}{% url 'core:base' %}{% endif %}"
              data-pos-link
-             {% if url_name == 'orders' and view == 'pos' %}aria-current="page"{% endif %}
-             class="flex items-center gap-1.5 whitespace-nowrap rounded-lg px-2 py-2 text-[10px] font-medium transition-colors lg:px-2.5 lg:text-xs xl:px-3 xl:text-sm {% if url_name == 'orders' and view == 'pos' %}bg-emerald-600 font-semibold text-white dark:bg-emerald-500 dark:text-slate-950{% else %}text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800/60 dark:hover:text-slate-100{% endif %}">
+             {% if role == 'ADMIN' and url_name == 'orders' and view == 'pos' or role != 'ADMIN' and url_name == 'base' %}aria-current="page"{% endif %}
+             class="flex items-center gap-1.5 whitespace-nowrap rounded-lg px-2 py-2 text-[10px] font-medium transition-colors lg:px-2.5 lg:text-xs xl:px-3 xl:text-sm {% if role == 'ADMIN' and url_name == 'orders' and view == 'pos' or role != 'ADMIN' and url_name == 'base' %}bg-emerald-600 font-semibold text-white dark:bg-emerald-500 dark:text-slate-950{% else %}text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800/60 dark:hover:text-slate-100{% endif %}">
             {% icon 'point_of_sale' 'hidden text-[18px] xl:inline' %}
             <span>Point of Sale</span>
           </a>
-          <a href="{% url 'core:products' %}"
-             {% if namespace == 'core' and 'products' in request.path %}aria-current="page"{% endif %}
-             class="flex items-center gap-1.5 whitespace-nowrap rounded-lg px-2 py-2 text-[10px] font-medium transition-colors lg:px-2.5 lg:text-xs xl:px-3 xl:text-sm {% if namespace == 'core' and 'products' in request.path %}bg-emerald-600 font-semibold text-white dark:bg-emerald-500 dark:text-slate-950{% else %}text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800/60 dark:hover:text-slate-100{% endif %}">
-            {% icon 'inventory_2' 'hidden text-[18px] xl:inline' %}
-            <span>Products &amp; Stock</span>
-          </a>
-          <a href="{% url 'core:orders' %}?view=orders"
-             {% if 'check-orders' in request.path or 'view-order' in request.path or url_name == 'orders' and view == 'orders' %}aria-current="page"{% endif %}
-             class="flex items-center gap-1.5 whitespace-nowrap rounded-lg px-2 py-2 text-[10px] font-medium transition-colors lg:px-2.5 lg:text-xs xl:px-3 xl:text-sm {% if 'check-orders' in request.path or 'view-order' in request.path or url_name == 'orders' and view == 'orders' %}bg-emerald-600 font-semibold text-white dark:bg-emerald-500 dark:text-slate-950{% else %}text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800/60 dark:hover:text-slate-100{% endif %}">
-            {% icon 'receipt_long' 'hidden text-[18px] xl:inline' %}
-            <span>Orders</span>
-          </a>
-          <a href="{% url 'core:orders' %}?view=reports"
-             {% if url_name == 'orders' and view != 'pos' and view != 'orders' %}aria-current="page"{% endif %}
-             class="flex items-center gap-1.5 whitespace-nowrap rounded-lg px-2 py-2 text-[10px] font-medium transition-colors lg:px-2.5 lg:text-xs xl:px-3 xl:text-sm {% if url_name == 'orders' and view != 'pos' and view != 'orders' %}bg-emerald-600 font-semibold text-white dark:bg-emerald-500 dark:text-slate-950{% else %}text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800/60 dark:hover:text-slate-100{% endif %}">
-            {% icon 'bar_chart' 'hidden text-[18px] xl:inline' %}
-            <span>Sales Reports</span>
-          </a>
+          {% if role == 'ADMIN' %}
+            <a href="{% url 'core:products' %}"
+               {% if namespace == 'core' and 'products' in request.path %}aria-current="page"{% endif %}
+               class="flex items-center gap-1.5 whitespace-nowrap rounded-lg px-2 py-2 text-[10px] font-medium transition-colors lg:px-2.5 lg:text-xs xl:px-3 xl:text-sm {% if namespace == 'core' and 'products' in request.path %}bg-emerald-600 font-semibold text-white dark:bg-emerald-500 dark:text-slate-950{% else %}text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800/60 dark:hover:text-slate-100{% endif %}">
+              {% icon 'inventory_2' 'hidden text-[18px] xl:inline' %}
+              <span>Products &amp; Stock</span>
+            </a>
+            <a href="{% url 'core:orders' %}?view=orders"
+               {% if 'check-orders' in request.path or 'view-order' in request.path or url_name == 'orders' and view == 'orders' %}aria-current="page"{% endif %}
+               class="flex items-center gap-1.5 whitespace-nowrap rounded-lg px-2 py-2 text-[10px] font-medium transition-colors lg:px-2.5 lg:text-xs xl:px-3 xl:text-sm {% if 'check-orders' in request.path or 'view-order' in request.path or url_name == 'orders' and view == 'orders' %}bg-emerald-600 font-semibold text-white dark:bg-emerald-500 dark:text-slate-950{% else %}text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800/60 dark:hover:text-slate-100{% endif %}">
+              {% icon 'receipt_long' 'hidden text-[18px] xl:inline' %}
+              <span>Orders</span>
+            </a>
+            <a href="{% url 'core:orders' %}?view=reports"
+               {% if url_name == 'orders' and view != 'pos' and view != 'orders' %}aria-current="page"{% endif %}
+               class="flex items-center gap-1.5 whitespace-nowrap rounded-lg px-2 py-2 text-[10px] font-medium transition-colors lg:px-2.5 lg:text-xs xl:px-3 xl:text-sm {% if url_name == 'orders' and view != 'pos' and view != 'orders' %}bg-emerald-600 font-semibold text-white dark:bg-emerald-500 dark:text-slate-950{% else %}text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800/60 dark:hover:text-slate-100{% endif %}">
+              {% icon 'bar_chart' 'hidden text-[18px] xl:inline' %}
+              <span>Sales Reports</span>
+            </a>
+          {% endif %}
         </nav>
       </div>
 
@@ -106,6 +110,14 @@
               {% icon 'lock_reset' 'text-[18px] text-slate-500 dark:text-slate-400' %}
               <span>Change password</span>
             </a>
+            {% if request.user.user_type == 'ADMIN' %}
+              <a href="{% url 'auth:accounts' %}"
+                 role="menuitem"
+                 class="flex items-center gap-2.5 px-3 py-2 text-sm text-slate-700 transition-colors hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800/60">
+                {% icon 'groups' 'text-[18px] text-slate-500 dark:text-slate-400' %}
+                <span>Manage accounts</span>
+              </a>
+            {% endif %}
           </div>
         </div>
 
@@ -144,37 +156,41 @@
     <div id="mobile-menu"
          class="hidden max-h-[calc(100dvh-4rem)] overflow-y-auto border-t border-slate-200 bg-slate-50/95 px-3 py-4 backdrop-blur-md dark:border-slate-800 dark:bg-slate-950/95 md:hidden">
       <nav class="flex flex-col gap-1" aria-label="Mobile navigation">
-        <a href="{% url 'core:base' %}"
-           {% if namespace == 'core' and url_name == 'base' %}aria-current="page"{% endif %}
-           class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-semibold {% if namespace == 'core' and url_name == 'base' %}bg-emerald-600 text-white dark:bg-emerald-500 dark:text-slate-950{% else %}font-medium text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800/60 dark:hover:text-slate-100{% endif %}">
-          {% icon 'hub' 'text-[20px]' %}
-          <span>Central Hub</span>
-        </a>
-        <a href="{% url 'core:orders' %}?view=pos"
+        {% if role == 'ADMIN' %}
+          <a href="{% url 'core:base' %}"
+             {% if namespace == 'core' and url_name == 'base' %}aria-current="page"{% endif %}
+             class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-semibold {% if namespace == 'core' and url_name == 'base' %}bg-emerald-600 text-white dark:bg-emerald-500 dark:text-slate-950{% else %}font-medium text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800/60 dark:hover:text-slate-100{% endif %}">
+            {% icon 'hub' 'text-[20px]' %}
+            <span>Central Hub</span>
+          </a>
+        {% endif %}
+        <a href="{% if role == 'ADMIN' %}{% url 'core:orders' %}?view=pos{% else %}{% url 'core:base' %}{% endif %}"
            data-pos-link
-           {% if url_name == 'orders' and view == 'pos' %}aria-current="page"{% endif %}
-           class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm {% if url_name == 'orders' and view == 'pos' %}bg-emerald-600 font-semibold text-white dark:bg-emerald-500 dark:text-slate-950{% else %}font-medium text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800/60 dark:hover:text-slate-100{% endif %}">
+           {% if role == 'ADMIN' and url_name == 'orders' and view == 'pos' or role != 'ADMIN' and url_name == 'base' %}aria-current="page"{% endif %}
+           class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm {% if role == 'ADMIN' and url_name == 'orders' and view == 'pos' or role != 'ADMIN' and url_name == 'base' %}bg-emerald-600 font-semibold text-white dark:bg-emerald-500 dark:text-slate-950{% else %}font-medium text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800/60 dark:hover:text-slate-100{% endif %}">
           {% icon 'point_of_sale' 'text-[20px]' %}
           <span>Point of Sale</span>
         </a>
-        <a href="{% url 'core:products' %}"
-           {% if namespace == 'core' and 'products' in request.path %}aria-current="page"{% endif %}
-           class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm {% if namespace == 'core' and 'products' in request.path %}bg-emerald-600 font-semibold text-white dark:bg-emerald-500 dark:text-slate-950{% else %}font-medium text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800/60 dark:hover:text-slate-100{% endif %}">
-          {% icon 'inventory_2' 'text-[20px]' %}
-          <span>Products &amp; Stock</span>
-        </a>
-        <a href="{% url 'core:orders' %}?view=orders"
-           {% if 'check-orders' in request.path or 'view-order' in request.path or url_name == 'orders' and view == 'orders' %}aria-current="page"{% endif %}
-           class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm {% if 'check-orders' in request.path or 'view-order' in request.path or url_name == 'orders' and view == 'orders' %}bg-emerald-600 font-semibold text-white dark:bg-emerald-500 dark:text-slate-950{% else %}font-medium text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800/60 dark:hover:text-slate-100{% endif %}">
-          {% icon 'receipt_long' 'text-[20px]' %}
-          <span>Orders</span>
-        </a>
-        <a href="{% url 'core:orders' %}?view=reports"
-           {% if url_name == 'orders' and view != 'pos' and view != 'orders' %}aria-current="page"{% endif %}
-           class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm {% if url_name == 'orders' and view != 'pos' and view != 'orders' %}bg-emerald-600 font-semibold text-white dark:bg-emerald-500 dark:text-slate-950{% else %}font-medium text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800/60 dark:hover:text-slate-100{% endif %}">
-          {% icon 'bar_chart' 'text-[20px]' %}
-          <span>Sales Reports</span>
-        </a>
+        {% if role == 'ADMIN' %}
+          <a href="{% url 'core:products' %}"
+             {% if namespace == 'core' and 'products' in request.path %}aria-current="page"{% endif %}
+             class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm {% if namespace == 'core' and 'products' in request.path %}bg-emerald-600 font-semibold text-white dark:bg-emerald-500 dark:text-slate-950{% else %}font-medium text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800/60 dark:hover:text-slate-100{% endif %}">
+            {% icon 'inventory_2' 'text-[20px]' %}
+            <span>Products &amp; Stock</span>
+          </a>
+          <a href="{% url 'core:orders' %}?view=orders"
+             {% if 'check-orders' in request.path or 'view-order' in request.path or url_name == 'orders' and view == 'orders' %}aria-current="page"{% endif %}
+             class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm {% if 'check-orders' in request.path or 'view-order' in request.path or url_name == 'orders' and view == 'orders' %}bg-emerald-600 font-semibold text-white dark:bg-emerald-500 dark:text-slate-950{% else %}font-medium text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800/60 dark:hover:text-slate-100{% endif %}">
+            {% icon 'receipt_long' 'text-[20px]' %}
+            <span>Orders</span>
+          </a>
+          <a href="{% url 'core:orders' %}?view=reports"
+             {% if url_name == 'orders' and view != 'pos' and view != 'orders' %}aria-current="page"{% endif %}
+             class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm {% if url_name == 'orders' and view != 'pos' and view != 'orders' %}bg-emerald-600 font-semibold text-white dark:bg-emerald-500 dark:text-slate-950{% else %}font-medium text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800/60 dark:hover:text-slate-100{% endif %}">
+            {% icon 'bar_chart' 'text-[20px]' %}
+            <span>Sales Reports</span>
+          </a>
+        {% endif %}
       </nav>
 
       <div class="mt-4 flex items-center justify-between gap-3 border-t border-slate-200 pt-4 dark:border-slate-800">

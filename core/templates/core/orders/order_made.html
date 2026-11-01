@@ -8,6 +8,7 @@
       <span class="tnum text-sm font-bold text-slate-900 dark:text-slate-100">#NC-{{ order.code }}</span>
     </div>
   {% endif %}
+  {% include "core/orders/pos_takings_oob.html" %}
   <div class="flex flex-col gap-2">
     <button type="button"
             @click="clear()"

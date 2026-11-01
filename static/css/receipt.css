@@ -1,0 +1,88 @@
+/* Receipt paper for an 80mm thermal roll. utils.render_attached_pdf loads
+   this after Tailwind's build and print.css, so its rules win the cascade.
+   The page size itself is NOT set here: WeasyPrint only takes fixed heights,
+   so the view hands it through render_attached_pdf(page_size_mm=...).
+   Thermal heads print dots only: no fills, no gray, hairline rules. */
+
+@page {
+  margin: 3mm 3mm 6mm;
+}
+
+body {
+  font-family: "Courier New", monospace;
+  font-size: 9pt;
+  line-height: 1.35;
+  color: #000;
+  background: none;
+}
+
+.receipt-head {
+  text-align: center;
+}
+
+.receipt-head .shop {
+  font-size: 12.5pt;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.rule {
+  border: 0;
+  border-top: 0.3mm dashed #000;
+  margin: 1.6mm 0;
+}
+
+table.lines {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+}
+
+/* Courier New 9pt chars are ~1.9mm wide: the budgets below are set to the
+   column widths, so amounts stay on one line. */
+table.lines col.item {
+  width: 52mm;
+}
+
+table.lines col.q {
+  width: 6mm;
+  text-align: right;
+}
+
+table.lines col.u {
+  width: 13mm;
+  text-align: right;
+}
+
+table.lines col.a {
+  width: 17mm;
+  text-align: right;
+}
+
+table.lines th,
+table.lines td {
+  padding: 0.5mm 0.6mm;
+  font-weight: 400;
+  text-align: left;
+}
+
+table.lines thead th {
+  border-bottom: 0.3mm solid #000;
+}
+
+table.lines .amt {
+  text-align: right;
+  white-space: nowrap;
+}
+
+table.lines tfoot td {
+  border-top: 0.3mm solid #000;
+  font-weight: 700;
+}
+
+.foot {
+  margin-top: 2.5mm;
+  text-align: center;
+  font-size: 8pt;
+}

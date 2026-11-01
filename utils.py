@@ -4,6 +4,7 @@ import pdfkit
 from django.template import loader
 from weasyprint import HTML, CSS
 
+import json
 import logging
 from pathlib import Path
 
@@ -60,12 +61,42 @@ def is_sale_person(user):
     return user.user_type == "SALEPERSON"
 
 
+def can_ring_up(user):
+    """Both roles work the register: the owner from the hub, the cashier from
+    the same screen. Nothing else in the hub is shared between them."""
+    return is_admin(user) or is_sale_person(user)
+
+
+def parse_cart(raw):
+    """Read the cart a register posts: one JSON array of line objects.
+
+    Returns the lines, or None when the parameter is not that shape. htmx 2
+    stringifies array entries through ``String()`` before sending them, so a
+    cart of objects arrives as the literal ``[object Object]``; the registers
+    therefore serialise the cart themselves and the view rejects anything it
+    cannot read instead of failing part-way through the sale.
+    """
+    try:
+        lines = json.loads(raw) if raw else []
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(lines, list):
+        return None
+    if not all(isinstance(line, dict) for line in lines):
+        return None
+    return lines
+
+
 def image_path(path, instance, filename):
     return f"{path}/{instance.pk}/{filename}"
 
 
-def render_attached_pdf(relative_template_path, context, file_name, css=None):
-    html = loader.render_to_string(relative_template_path, context)
+def render_attached_pdf(relative_template_path, context, file_name, css=None, page_size_mm=None):
+    # every printed document can reach the company block without each view
+    # remembering to pass it
+    html = loader.render_to_string(
+        relative_template_path, {**context, "company": settings.COMPANY_INFO}
+    )
 
     stylesheets = []
     for sheet in (*PRINT_STYLESHEETS, *(css or [])):
@@ -78,6 +109,13 @@ def render_attached_pdf(relative_template_path, context, file_name, css=None):
             )
             continue
         stylesheets.append(CSS(filename=str(path)))
+
+    # WeasyPrint cannot size a page to its content, so a caller that prints on
+    # a roll passes the exact sheet it wants; last sheet wins the @page cascade
+    if page_size_mm:
+        stylesheets.append(
+            CSS(string=f"@page {{ size: {page_size_mm[0]}mm {page_size_mm[1]}mm; }}")
+        )
 
     pdf_output = HTML(
         string=html,

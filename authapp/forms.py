@@ -1,6 +1,8 @@
 from django.contrib.auth import get_user_model
 from django.contrib.auth.forms import PasswordChangeForm as DjangoPasswordChangeForm
 from django.contrib.auth.forms import UserCreationForm
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError
 from django import forms
 
 # same control shell the product dialog uses, kept here so authapp does not
@@ -15,13 +17,51 @@ FIELD = (
 
 
 class NewAccountForm(UserCreationForm):
+    """The owner creates salespersons only — user_type is set in save(), never
+    taken from the request, so a forged role field cannot open an admin seat."""
+
     first_name = forms.CharField()
     last_name = forms.CharField()
-    other_name = forms.CharField(required=False)
 
     class Meta:
         model = get_user_model()
         fields = ["username", "password1", "password2"]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for field in self.fields:
+            self.fields[field].widget.attrs.update({"class": FIELD})
+
+    def save(self, commit=True):
+        account = super().save(commit=False)
+        account.user_type = "SALEPERSON"
+        if commit:
+            account.save()
+        return account
+
+
+class AccountSetPasswordForm(forms.Form):
+    """Owner-side password reset: two entries, checked against the project's
+    validators, with no knowledge of the old password."""
+
+    new_password1 = forms.CharField(
+        widget=forms.PasswordInput(attrs={"class": FIELD, "autocomplete": "new-password"}),
+        label="New password",
+    )
+    new_password2 = forms.CharField(
+        widget=forms.PasswordInput(attrs={"class": FIELD, "autocomplete": "new-password"}),
+        label="Confirm password",
+    )
+
+    def clean(self):
+        cleaned = super().clean()
+        password1 = cleaned.get("new_password1")
+        password2 = cleaned.get("new_password2")
+        if password1 and password2:
+            if password1 != password2:
+                raise ValidationError("The two password entries do not match.")
+            validate_password(password1)
+        return cleaned
 
 
 class ProfileForm(forms.ModelForm):

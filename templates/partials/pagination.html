@@ -1,52 +1,63 @@
-<nav class="pagination" aria-label="Table navigation">
-  <span class="text-sm font-normal text-gray-500 dark:text-gray-400">Showing <span class="font-semibold text-gray-900 dark:text-white">{{ starting_number }}-{{ stopping_number }}</span> of <span class="font-semibold text-gray-900 dark:text-white">{{ number_of_products }}</span></span>
-  <ul class="inline-flex items-center -space-x-px">
-    <li>
-      <a {% if page_obj.has_previous %} hx-get="{% url 'core:load-products' %}?l={{ limit }}&p={{ page_obj.previous_page_number }}" hx-target="#results" hx-vals="js:{s:document.querySelector('#table-search').value}" {% endif %}
+{% load humanize %}
+{% load icons %}
+<div class="flex flex-col items-center justify-between gap-3 border-t border-slate-200 px-4 py-3 dark:border-slate-800 sm:flex-row">
+  <p class="text-xs text-slate-500 dark:text-slate-400">
+    Showing
+    <span class="tnum font-semibold text-slate-900 dark:text-slate-100">{{ starting_number|intcomma }}</span>
+    to
+    <span class="tnum font-semibold text-slate-900 dark:text-slate-100">{{ stopping_number|intcomma }}</span>
+    of
+    <span class="tnum font-semibold text-slate-900 dark:text-slate-100">{{ number_of_products|intcomma }}</span>
+    inventory entries
+  </p>
 
-         class="previous cursor-pointer ">
-        <span class="sr-only">Previous</span>
-        <svg class="w-4 h-4"
-             aria-hidden="true"
-             fill="currentColor"
-             viewBox="0 0 20 20"
-             xmlns="http://www.w3.org/2000/svg">
-          <path fill-rule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clip-rule="evenodd">
-          </path>
-        </svg>
+  <nav class="flex items-center gap-1" aria-label="Inventory pages">
+    {% if page_obj.has_previous %}
+      <a hx-get="{% url 'core:load-products' %}?l={{ limit }}&p={{ page_obj.previous_page_number }}"
+         hx-include="#ledger-filters"
+         hx-target="#results"
+         hx-swap="innerHTML"
+         class="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-100">
+        {% icon 'chevron_left' 'text-[18px]' %}
+        <span class="sr-only">Previous page</span>
       </a>
-    </li>
+    {% else %}
+      <span class="flex h-8 w-8 cursor-not-allowed items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-600"
+            aria-hidden="true">
+        {% icon 'chevron_left' 'text-[18px]' %}
+      </span>
+    {% endif %}
+
     {% for page in pages %}
-      <li>
-        {% if page.allow == False %}
-          <a disabled="disabled"
-             class="cursor-pointer px-3 py-2 leading-tight text-gray-500 bg-white border border-gray-300 hover:bg-gray-100 hover:text-gray-700 dark:bg-gray-800 dark:border-gray-700 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white">
-            {{ page.number }}
-          </a>
-        {% else %}
-          <a hx-get="{% url 'core:load-products' %}?l={{ limit }}&p={{ page.number }}"
-             hx-target="#results"
-             hx-vals="js:{s:document.querySelector('#table-search').value}"
-             {% if page.number == page_obj.number %}aria-current="page"{% endif %}
-             class="cursor-pointer px-3 py-2 leading-tight text-gray-500 bg-white border border-gray-300 hover:bg-gray-100 hover:text-gray-700 dark:bg-gray-800 dark:border-gray-700 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white">
-            {{ page.number }}
-          </a>
-        {% endif %}
-      </li>
+      {% if page.allow %}
+        <a hx-get="{% url 'core:load-products' %}?l={{ limit }}&p={{ page.number }}"
+           hx-include="#ledger-filters"
+           hx-target="#results"
+           hx-swap="innerHTML"
+           {% if page.number == page_obj.number %}aria-current="page"{% endif %}
+           class="tnum flex h-8 min-w-[2rem] items-center justify-center rounded-lg px-2 text-xs transition-colors {% if page.number == page_obj.number %}bg-emerald-600 font-semibold text-white dark:bg-emerald-500 dark:text-slate-950{% else %}border border-slate-200 bg-white font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-100{% endif %}">
+          {{ page.number }}
+        </a>
+      {% else %}
+        <span class="flex h-8 w-8 items-center justify-center text-xs text-slate-400 dark:text-slate-500"
+              aria-hidden="true">{{ page.number }}</span>
+      {% endif %}
     {% endfor %}
-    <li>
-      <a {% if page_obj.has_next %} hx-get="{% url 'core:load-products' %}?l={{ limit }}&p={{ page_obj.next_page_number }}" hx-target="#results" hx-vals="js:{s:document.querySelector('#table-search').value}" {% endif %}
-         class="next cursor-pointer">
-        <span class="sr-only">Next</span>
-        <svg class="w-4 h-4"
-             aria-hidden="true"
-             fill="currentColor"
-             viewBox="0 0 20 20"
-             xmlns="http://www.w3.org/2000/svg">
-          <path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clip-rule="evenodd">
-          </path>
-        </svg>
+
+    {% if page_obj.has_next %}
+      <a hx-get="{% url 'core:load-products' %}?l={{ limit }}&p={{ page_obj.next_page_number }}"
+         hx-include="#ledger-filters"
+         hx-target="#results"
+         hx-swap="innerHTML"
+         class="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-100">
+        {% icon 'chevron_right' 'text-[18px]' %}
+        <span class="sr-only">Next page</span>
       </a>
-    </li>
-  </ul>
-</nav>
+    {% else %}
+      <span class="flex h-8 w-8 cursor-not-allowed items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-600"
+            aria-hidden="true">
+        {% icon 'chevron_right' 'text-[18px]' %}
+      </span>
+    {% endif %}
+  </nav>
+</div>

@@ -1,0 +1,268 @@
+{% load humanize %}
+{% load icons %}
+{# Orders & Receipts Ledger — full-page rebuild of the ?view=orders surface. #}
+<div class="flex flex-col gap-4"
+     x-data="{
+       q: '{{ request.GET.q|default:""|escapejs }}',
+       users: '{{ request.GET.users|default:"all"|escapejs }}',
+       {# A deep linked receipt code searches the whole history, not just today. #}
+       date: '{% if not request.GET.q %}{{ kpi.date|date:"Y-m-d" }}{% endif %}',
+       ledgerUrl: '{% url "core:orders-ledger" %}',
+       csvUrl: '{% url "core:orders-export-csv" %}',
+       printUrlTemplate: '{% url "core:print-todays-orders" "__D__" "__U__" %}',
+       fetchPage(page) {
+         htmx.ajax('GET', this.ledgerUrl, {
+           target: '#ledger_rows',
+           swap: 'innerHTML',
+           values: { q: this.q, users: this.users, date: this.date, p: page || 1 },
+         });
+       },
+       showAllDates() {
+         this.date = '';
+         this.fetchPage(1);
+       },
+       exportCsv() {
+         const params = new URLSearchParams({ q: this.q, users: this.users, date: this.date });
+         window.location = this.csvUrl + '?' + params.toString();
+       },
+       printBatch() {
+         if (!this.date) return;
+         window.location = this.printUrlTemplate
+           .replace('__D__', encodeURIComponent(this.date))
+           .replace('__U__', encodeURIComponent(this.users));
+       },
+     }"
+     x-init="fetchPage(1)">
+
+  {# ---------- Page header ---------- #}
+  <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+    <div class="min-w-0">
+      <nav class="flex items-center gap-1 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400"
+           aria-label="Breadcrumb">
+        <a href="{% url 'core:base' %}"
+           class="transition-colors hover:text-slate-900 dark:hover:text-slate-100">Store Central</a>
+        {% icon 'chevron_right' 'text-[14px]' %}
+        <span class="text-emerald-700 dark:text-emerald-400">Orders &amp; Receipts</span>
+      </nav>
+      <h1 class="mt-1 text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-100 md:text-[28px]">
+        Orders &amp; Receipts Ledger
+      </h1>
+      <p class="mt-1 max-w-2xl text-sm text-slate-500 dark:text-slate-400">
+        Search past transactions, inspect basket line items, and reprint receipts.
+      </p>
+    </div>
+    <div class="flex shrink-0 flex-wrap items-center gap-2">
+      <a href="{% url 'core:orders' %}?view=reports"
+         class="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-sm transition-colors hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800">
+        {% icon 'bar_chart' 'text-[18px] text-slate-500 dark:text-slate-400' %}
+        <span>Sales Reports</span>
+      </a>
+      <button type="button"
+              @click="exportCsv()"
+              class="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-sm transition-colors hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800">
+        {% icon 'download' 'text-[18px] text-slate-500 dark:text-slate-400' %}
+        <span>Export Orders CSV</span>
+      </button>
+      <a href="{% url 'core:orders' %}?view=pos"
+         class="group inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3.5 py-2 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-emerald-700 dark:bg-emerald-500 dark:text-slate-950 dark:hover:bg-emerald-400">
+        {% icon 'add' 'text-[18px] transition-transform group-hover:rotate-90' %}
+        <span>New Sale (POS)</span>
+        <kbd class="tnum rounded bg-white/20 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider">F2</kbd>
+      </a>
+    </div>
+  </div>
+
+  {# ---------- Today's KPI cards ---------- #}
+  <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+    <div class="flex flex-col justify-between gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+      <div class="flex items-center justify-between">
+        <span class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Today's Receipts</span>
+        <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-100 text-emerald-700 dark:bg-slate-800 dark:text-emerald-400">
+          {% icon 'receipt_long' 'text-[20px]' %}
+        </span>
+      </div>
+      <div>
+        <div class="tnum text-[28px] font-bold leading-tight tracking-tight text-slate-900 dark:text-slate-100">
+          {{ kpi.order_count|intcomma }}
+        </div>
+        <div class="mt-1 flex items-center gap-1.5 text-xs font-semibold text-emerald-700 dark:text-emerald-400">
+          {% icon 'check_circle' 'text-[16px]' %}
+          <span>
+            {% if kpi.cashier_count == 1 %}1 cashier on sales today{% else %}{{ kpi.cashier_count }} cashiers on sales today{% endif %}
+          </span>
+        </div>
+      </div>
+    </div>
+
+    <div class="flex flex-col justify-between gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+      <div class="flex items-center justify-between">
+        <span class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Today's Revenue</span>
+        <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400">
+          {% icon 'payments' 'text-[20px]' %}
+        </span>
+      </div>
+      <div>
+        <div class="tnum text-[28px] font-bold leading-tight tracking-tight text-slate-900 dark:text-slate-100">
+          GH₵ {{ kpi.revenue|floatformat:2|intcomma }}
+        </div>
+        <div class="mt-1 flex items-center gap-1 text-xs font-semibold
+                    {% if kpi.revenue_delta_pct is not None and kpi.revenue_delta_pct < 0 %}text-rose-600 dark:text-rose-400{% else %}text-emerald-700 dark:text-emerald-400{% endif %}">
+          {% if kpi.revenue_delta_pct is not None %}
+            {% if kpi.revenue_delta_pct < 0 %}{% icon 'trending_down' 'text-[16px]' %}{% else %}{% icon 'trending_up' 'text-[16px]' %}{% endif %}
+            <span class="tnum">{{ kpi.revenue_delta_pct }}% vs yesterday</span>
+          {% else %}
+            <span>No revenue recorded yesterday</span>
+          {% endif %}
+        </div>
+      </div>
+      {% if kpi.yesterday_revenue %}
+        {% widthratio kpi.revenue kpi.yesterday_revenue 100 as revenue_pct %}
+        {% if revenue_pct > 100 %}{% widthratio 1 1 100 as revenue_pct %}{% endif %}
+        <div class="h-1 w-full overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
+          <div class="h-full rounded-full bg-emerald-600 dark:bg-emerald-500" style="width: {{ revenue_pct }}%"></div>
+        </div>
+      {% else %}
+        <div class="h-1 w-full rounded-full bg-slate-100 dark:bg-slate-800"></div>
+      {% endif %}
+    </div>
+
+    <div class="flex flex-col justify-between gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+      <div class="flex items-center justify-between">
+        <span class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Average Order Value</span>
+        <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+          {% icon 'shopping_bag' 'text-[20px]' %}
+        </span>
+      </div>
+      <div>
+        <div class="tnum text-[28px] font-bold leading-tight tracking-tight text-slate-900 dark:text-slate-100">
+          {% if kpi.aov is not None %}GH₵ {{ kpi.aov|floatformat:2|intcomma }}{% else %}—{% endif %}
+        </div>
+        <div class="mt-1 flex items-center gap-1 text-xs font-semibold text-slate-500 dark:text-slate-400">
+          {% if kpi.avg_items is not None %}
+            {% icon 'all_inclusive' 'text-[16px]' %}
+            <span class="tnum">~{{ kpi.avg_items }} units per basket</span>
+          {% else %}
+            <span>No sales recorded today yet</span>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <div class="flex flex-col justify-between gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+      <div class="flex items-center justify-between">
+        <span class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Today's Profit</span>
+        <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400">
+          {% icon 'sell' 'text-[20px]' %}
+        </span>
+      </div>
+      <div>
+        <div class="tnum text-[28px] font-bold leading-tight tracking-tight text-slate-900 dark:text-slate-100">
+          GH₵ {{ kpi.profit|floatformat:2|intcomma }}
+        </div>
+        <div class="mt-1 flex items-center gap-1 text-xs font-semibold text-slate-500 dark:text-slate-400">
+          {% if kpi.margin_pct is not None %}
+            <span class="tnum">{{ kpi.margin_pct }}% gross margin on today's revenue</span>
+          {% else %}
+            <span>Awaiting today's first sale</span>
+          {% endif %}
+        </div>
+      </div>
+      {% if kpi.margin_pct is not None %}
+        <div class="h-1 w-full overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
+          <div class="h-full rounded-full bg-emerald-600 dark:bg-emerald-500" style="width: {% if kpi.margin_pct > 100 %}100{% else %}{{ kpi.margin_pct }}{% endif %}%"></div>
+        </div>
+      {% else %}
+        <div class="h-1 w-full rounded-full bg-slate-100 dark:bg-slate-800"></div>
+      {% endif %}
+    </div>
+  </div>
+
+  {# ---------- Filter & toolbar bar ---------- #}
+  <div class="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+    <div class="flex flex-col items-stretch gap-3 lg:flex-row lg:items-center">
+      <div class="relative min-w-0 flex-1">
+        {% icon 'search' 'pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[20px] text-slate-500 dark:text-slate-400' %}
+        <label class="sr-only" for="ledger-search">Search receipts</label>
+        <input type="text"
+               id="ledger-search"
+               autocomplete="off"
+               x-model="q"
+               @input.debounce.400ms="fetchPage(1)"
+               class="h-11 w-full rounded-lg border border-slate-200 bg-slate-50 pl-10 pr-24 text-sm text-slate-900 placeholder:text-slate-500 focus:border-emerald-600 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-600/30 sm:text-base dark:border-slate-800 dark:bg-slate-950 dark:text-slate-100 dark:focus:bg-slate-950 dark:focus:border-emerald-500"
+               placeholder="Search receipt code (e.g. A1B2C3)...">
+        <span class="tnum absolute right-3 top-1/2 -translate-y-1/2 rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-medium uppercase tracking-wider text-slate-500 dark:bg-slate-800/60 dark:text-slate-400">Press /</span>
+      </div>
+      <div class="flex flex-wrap items-center gap-2 sm:flex-nowrap">
+        <label class="sr-only" for="ledger-cashier">Cashier</label>
+        <div class="relative min-w-[140px]">
+          <select id="ledger-cashier"
+                  x-model="users"
+                  @change="fetchPage(1)"
+                  class="h-10 w-full cursor-pointer appearance-none rounded-lg border border-slate-200 bg-slate-50 pl-3 pr-8 text-sm text-slate-900 focus:border-emerald-600 focus:outline-none focus:ring-1 focus:ring-emerald-600/40 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-100">
+            <option value="all">All Cashiers</option>
+            {% for cashier in cashiers %}
+              <option value="{{ cashier.username }}">{{ cashier.get_full_name|default:cashier.username }}</option>
+            {% endfor %}
+          </select>
+          {% icon 'expand_more' 'pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[18px] text-slate-500 dark:text-slate-400' %}
+        </div>
+        <label class="sr-only" for="ledger-date">Date</label>
+        <div class="relative">
+          {% icon 'calendar_today' 'pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[18px] text-slate-500 dark:text-slate-400' %}
+          <input type="date"
+                 id="ledger-date"
+                 x-model="date"
+                 @change="fetchPage(1)"
+                 class="h-10 rounded-lg border border-slate-200 bg-slate-50 pl-9 pr-3 text-sm text-slate-900 focus:border-emerald-600 focus:outline-none focus:ring-1 focus:ring-emerald-600/40 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-100 [&::-webkit-calendar-picker-indicator]:opacity-0">
+        </div>
+        <button type="button"
+                @click="printBatch()"
+                :disabled="!date"
+                class="inline-flex h-10 items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-3 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-200 dark:hover:bg-slate-800"
+                title="Download the day's sales PDF for the selected date and cashier">
+          {% icon 'print' 'text-[18px] text-slate-500 dark:text-slate-400' %}
+          <span>Print Batch</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  {# ---------- Master–detail: ledger table + receipt inspector ---------- #}
+  <div class="grid grid-cols-1 items-start gap-4 lg:grid-cols-12">
+    <section class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm lg:col-span-7 xl:col-span-8 dark:border-slate-800 dark:bg-slate-900"
+             aria-label="Orders ledger">
+      <div id="ledger_rows" class="flex flex-col"></div>
+    </section>
+
+    <aside class="lg:sticky lg:top-20 lg:col-span-5 xl:col-span-4" aria-label="Receipt inspector">
+      <div id="order_details">
+        <div class="flex flex-col items-center gap-2 rounded-xl border border-dashed border-slate-300 bg-white/60 p-8 text-center shadow-sm dark:border-slate-700 dark:bg-slate-900/60">
+          {% icon 'receipt' 'text-[28px] text-slate-400 dark:text-slate-500' %}
+          <p class="text-sm font-semibold text-slate-700 dark:text-slate-200">Select a receipt</p>
+          <p class="text-xs text-slate-500 dark:text-slate-400">Click any row to inspect its basket and reprint the receipt.</p>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <script>
+    (() => {
+      if (window.__ledgerSearchShortcut) return;
+      window.__ledgerSearchShortcut = (event) => {
+        if (event.key !== "/") return;
+        const active = document.activeElement;
+        if (active && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName)) return;
+        const search = document.getElementById("ledger-search");
+        if (!search) return;
+        event.preventDefault();
+        search.focus();
+      };
+      document.addEventListener("keydown", window.__ledgerSearchShortcut);
+      const inspectorPanel = document.getElementById("order_details");
+      const emptyState = inspectorPanel ? inspectorPanel.innerHTML : "";
+      window.closeLedgerInspector = () => {
+        if (inspectorPanel) inspectorPanel.innerHTML = emptyState;
+      };
+    })();
+  </script>
+</div>

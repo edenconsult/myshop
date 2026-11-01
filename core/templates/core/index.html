@@ -1,44 +1,595 @@
 {% extends "core/_core_base.html" %}
+{% load humanize %}
+{% load icons %}
 {% block title %}
-  Admin Desk |
+  Store Central Hub |
 {% endblock title %}
-{% block nav %}
-  {% include "core/partials/nav.html" %}
-{% endblock nav %}
 {% block content %}
-  <div class=" p-16">
-    <h2 class="text-4xl mb-16">Welcome to <b class="text-yellow-500 font-semibold">Noble Cosmetics</b></h2>
-    <div class="grid md:grid-cols-3 gap-12 bg-gray-100 border border-gray-300 p-6 md:p-12">
-      <a class="text-center rounded-md uppercase tracking-wide text-white px-16 py-12 text-2xl font-medium  bg-orange-600 hover:bg-orange-700 "
-         href="{% url 'core:products' %}">
-        <div class="flex items-center space-x-6">
-          <svg class="w-24 h-24 dark:text-white"
-               fill="none"
-               stroke="currentColor"
-               viewBox="0 0 24 24"
-               aria-hidden="true"
-               xmlns="http://www.w3.org/2000/svg">
-            <path d="M15.75 10.5V6a3.75 3.75 0 10-7.5 0v4.5m11.356-1.993l1.263 12c.07.665-.45 1.243-1.119 1.243H4.25a1.125 1.125 0 01-1.12-1.243l1.264-12A1.125 1.125 0 015.513 7.5h12.974c.576 0 1.059.435 1.119 1.007zM8.625 10.5a.375.375 0 11-.75 0 .375.375 0 01.75 0zm7.5 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z" stroke-linecap="round" stroke-linejoin="round">
-            </path>
-          </svg>
-          <span>Products</span>
-        </div>
+  <!-- ========================================================== -->
+  <!-- 1. Welcome banner                                         -->
+  <!-- ========================================================== -->
+  <section class="flex flex-col gap-6 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900 md:p-8 lg:flex-row lg:items-center lg:justify-between">
+    <div class="max-w-2xl">
+      <h1 class="text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-100 md:text-3xl">
+        Welcome back, {{ request.user.get_full_name|default:request.user.username }}
+      </h1>
+      <p class="mt-2 max-w-xl text-sm leading-6 text-slate-500 dark:text-slate-400">
+        Everything you need to manage products, ring up customer sales, track past receipts,
+        and review store performance.
+      </p>
+      <div class="mt-5 inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-700 dark:bg-slate-800/60 dark:text-slate-300">
+        {% icon 'payments' 'text-[16px] text-emerald-600 dark:text-emerald-400' %}
+        <span>
+          Current Till:
+          <strong class="tnum ml-0.5 font-bold text-slate-900 dark:text-slate-100">
+            GH₵ {{ today_sales|floatformat:2|intcomma }}
+          </strong>
+        </span>
+      </div>
+    </div>
+
+    <div class="flex w-full flex-col gap-3 sm:flex-row lg:w-auto lg:flex-col">
+      <a href="{% url 'core:orders' %}?view=pos"
+         data-pos-link
+         class="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-xl bg-emerald-600 px-5 py-3 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-emerald-700 active:scale-[0.99] dark:bg-emerald-500 dark:text-slate-950 dark:hover:bg-emerald-600">
+        {% icon 'point_of_sale' 'text-[22px]' %}
+        <span>+ New Customer Sale (POS)</span>
       </a>
-      <a class="text-center rounded-md uppercase tracking-wide text-white px-16 py-12 text-2xl font-medium  bg-green-600 hover:bg-green-700 "
-         href="{% url 'core:orders' %}">
-        <div class="flex items-center space-x-6">
-          <svg class="w-24 h-24 dark:text-white"
-               fill="none"
-               stroke="currentColor"
-               viewBox="0 0 24 24"
-               aria-hidden="true"
-               xmlns="http://www.w3.org/2000/svg">
-            <path d="M12 6v12m-3-2.818l.879.659c1.171.879 3.07.879 4.242 0 1.172-.879 1.172-2.303 0-3.182C13.536 12.219 12.768 12 12 12c-.725 0-1.45-.22-2.003-.659-1.106-.879-1.106-2.303 0-3.182s2.9-.879 4.006 0l.415.33M21 12a9 9 0 11-18 0 9 9 0 0118 0z" stroke-linecap="round" stroke-linejoin="round">
-            </path>
-          </svg>
-          <span>orders</span>
-        </div>
+      <a href="{% url 'core:products' %}?view=add"
+         class="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-900 transition-colors hover:bg-slate-100 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-100 dark:hover:bg-slate-800/60">
+        {% icon 'add_box' 'text-[20px] text-emerald-600 dark:text-emerald-400' %}
+        <span>+ Add New Product</span>
       </a>
     </div>
-  </div>
+  </section>
+
+  <!-- ========================================================== -->
+  <!-- 2. Main store workflows                                   -->
+  <!-- ========================================================== -->
+  <section class="flex flex-col gap-4">
+    <div>
+      <h2 class="text-lg font-bold tracking-tight text-slate-900 dark:text-slate-100 md:text-xl">
+        Main Store Workflows
+      </h2>
+      <p class="mt-0.5 text-sm text-slate-500 dark:text-slate-400">
+        Direct portals to the main sections of your store system
+      </p>
+    </div>
+
+    <div class="grid grid-cols-1 gap-5 md:grid-cols-2">
+      <!-- POS card -->
+      <article id="point-of-sale"
+               class="group flex scroll-mt-24 flex-col justify-between rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition-shadow hover:shadow-md dark:border-slate-800 dark:bg-slate-900 md:p-6">
+        <div class="flex flex-col gap-4">
+          <div class="flex items-start justify-between gap-3">
+            <div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-emerald-600 transition-transform group-hover:scale-105 dark:bg-slate-800/60 dark:text-emerald-400">
+              {% icon 'point_of_sale' 'text-[26px]' %}
+            </div>
+            <span class="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-1 text-[11px] font-semibold text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-400">
+              <span class="h-1.5 w-1.5 rounded-full bg-emerald-500 dark:bg-emerald-400"
+                    aria-hidden="true"></span>
+              Ready for Checkout
+            </span>
+          </div>
+
+          <div>
+            <h3 class="text-lg font-bold tracking-tight text-slate-900 dark:text-slate-100">
+              Point of Sale (POS)
+            </h3>
+            <p class="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
+              Ring up orders, scan barcodes, and accept Cash, MoMo, or Card payments without
+              delay.
+            </p>
+          </div>
+
+          <div class="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs font-semibold text-slate-500 dark:text-slate-400">
+            <span class="inline-flex items-center gap-1">
+              {% icon 'bolt' 'text-[16px] text-emerald-600 dark:text-emerald-400' %}
+              Fast Barcode Lookup
+            </span>
+            <span class="inline-flex items-center gap-1">
+              {% icon 'receipt' 'text-[16px] text-emerald-600 dark:text-emerald-400' %}
+              Instant Receipts
+            </span>
+          </div>
+        </div>
+
+        <div class="mt-5 flex flex-col gap-2 border-t border-slate-200 pt-4 dark:border-slate-800 lg:flex-row lg:items-center">
+          <a href="{% url 'core:orders' %}?view=pos"
+             class="inline-flex min-h-[40px] flex-1 items-center justify-center gap-2 whitespace-nowrap rounded-lg bg-emerald-600 px-4 py-2.5 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-emerald-700 dark:bg-emerald-500 dark:text-slate-950 dark:hover:bg-emerald-600">
+            <span>Launch Checkout Register</span>
+            {% icon 'arrow_forward' 'text-[18px]' %}
+          </a>
+        </div>
+      </article>
+
+      <!-- Products card -->
+      <article id="products"
+               class="group flex scroll-mt-24 flex-col justify-between rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition-shadow hover:shadow-md dark:border-slate-800 dark:bg-slate-900 md:p-6">
+        <div class="flex flex-col gap-4">
+          <div class="flex items-start justify-between gap-3">
+            <div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-700 transition-transform group-hover:scale-105 dark:bg-slate-800/60 dark:text-slate-300">
+              {% icon 'inventory_2' 'text-[26px]' %}
+            </div>
+            <div class="flex flex-wrap items-center justify-end gap-2">
+              <span class="tnum rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-700 dark:bg-slate-800/60 dark:text-slate-300">
+                {{ products_listed|intcomma }} Products Listed
+              </span>
+              <span class="tnum rounded-full border border-rose-200 bg-rose-50 px-2.5 py-1 text-[11px] font-semibold text-rose-600 dark:border-rose-900/50 dark:bg-rose-950/60 dark:text-rose-400">
+                {{ out_of_stock_count }} Out of Stock
+              </span>
+            </div>
+          </div>
+
+          <div>
+            <h3 class="text-lg font-bold tracking-tight text-slate-900 dark:text-slate-100">
+              Products &amp; Inventory
+            </h3>
+            <p class="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
+              Manage {{ products_listed|intcomma }} cosmetic items, update prices, adjust stock
+              levels, or import your catalog.
+            </p>
+          </div>
+
+          <div class="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs font-semibold text-slate-500 dark:text-slate-400">
+            <span class="inline-flex items-center gap-1">
+              {% icon 'sell' 'text-[16px] text-slate-600 dark:text-slate-300' %}
+              Retail &amp; Cost Pricing
+            </span>
+            <span class="inline-flex items-center gap-1">
+              {% icon 'warning' 'text-[16px] text-rose-500 dark:text-rose-400' %}
+              Low Stock Monitoring
+            </span>
+          </div>
+        </div>
+
+        <div class="mt-5 flex flex-col gap-2 border-t border-slate-200 pt-4 dark:border-slate-800 sm:flex-row sm:flex-wrap sm:items-center">
+          <a href="{% url 'core:products' %}"
+             class="inline-flex min-h-[40px] min-w-[180px] flex-1 items-center justify-center gap-2 whitespace-nowrap rounded-lg bg-slate-100 px-4 py-2.5 text-xs font-semibold text-slate-900 transition-colors hover:bg-slate-200 dark:bg-slate-800/60 dark:text-slate-100 dark:hover:bg-slate-800">
+            <span>View Product Catalog</span>
+            {% icon 'arrow_forward' 'text-[18px]' %}
+          </a>
+          <a href="{% url 'core:products' %}?view=add"
+             class="inline-flex min-h-[40px] items-center justify-center gap-1 whitespace-nowrap rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs font-semibold text-slate-900 transition-colors hover:bg-slate-100 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-100 dark:hover:bg-slate-800/60">
+            {% icon 'add' 'text-[18px] text-emerald-600 dark:text-emerald-400' %}
+            <span>Add Product</span>
+          </a>
+          <a href="{% url 'core:products' %}?view=out-of-stock"
+             class="inline-flex min-h-[40px] items-center justify-center gap-1 whitespace-nowrap rounded-lg border border-rose-200 bg-rose-50 px-3 py-2.5 text-xs font-semibold text-rose-600 transition-colors hover:bg-rose-100 dark:border-rose-900/50 dark:bg-rose-950/60 dark:text-rose-400 dark:hover:bg-rose-950">
+            {% icon 'notification_important' 'text-[18px]' %}
+            <span>Restock Alerts ({{ out_of_stock_count }})</span>
+          </a>
+        </div>
+      </article>
+
+      <!-- Orders card -->
+      <article id="orders"
+               class="group flex scroll-mt-24 flex-col justify-between rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition-shadow hover:shadow-md dark:border-slate-800 dark:bg-slate-900 md:p-6">
+        <div class="flex flex-col gap-4">
+          <div class="flex items-start justify-between gap-3">
+            <div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-700 transition-transform group-hover:scale-105 dark:bg-slate-800/60 dark:text-slate-300">
+              {% icon 'receipt_long' 'text-[26px]' %}
+            </div>
+            <span class="tnum rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-700 dark:bg-slate-800/60 dark:text-slate-300">
+              {{ orders_today|intcomma }} Transactions Today
+            </span>
+          </div>
+
+          <div>
+            <h3 class="text-lg font-bold tracking-tight text-slate-900 dark:text-slate-100">
+              Orders &amp; Receipts
+            </h3>
+            <p class="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
+              Track customer purchases, search past receipts, and manage refunds or reprints.
+            </p>
+          </div>
+
+          <div class="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs font-semibold text-slate-500 dark:text-slate-400">
+            <span class="inline-flex items-center gap-1">
+              {% icon 'search' 'text-[16px] text-emerald-600 dark:text-emerald-400' %}
+              Search by ID or Cashier
+            </span>
+            <span class="inline-flex items-center gap-1">
+              {% icon 'print' 'text-[16px] text-slate-600 dark:text-slate-300' %}
+              Quick Reprint
+            </span>
+          </div>
+        </div>
+
+        <div class="mt-5 flex flex-col gap-2 border-t border-slate-200 pt-4 dark:border-slate-800 lg:flex-row lg:items-center">
+          <a href="{% url 'core:orders' %}?view=orders"
+             class="inline-flex min-h-[40px] flex-1 items-center justify-center gap-2 whitespace-nowrap rounded-lg bg-slate-100 px-4 py-2.5 text-xs font-semibold text-slate-900 transition-colors hover:bg-slate-200 dark:bg-slate-800/60 dark:text-slate-100 dark:hover:bg-slate-800">
+            <span>View All Orders</span>
+            {% icon 'arrow_forward' 'text-[18px]' %}
+          </a>
+          <a href="{% url 'core:orders' %}?view=orders"
+             class="inline-flex min-h-[40px] items-center justify-center gap-1.5 whitespace-nowrap rounded-lg border border-slate-200 bg-white px-3.5 py-2.5 text-xs font-semibold text-slate-900 transition-colors hover:bg-slate-100 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-100 dark:hover:bg-slate-800/60">
+            {% icon 'find_in_page' 'text-[18px] text-slate-500 dark:text-slate-400' %}
+            <span>Find Receipt</span>
+          </a>
+        </div>
+      </article>
+
+      <!-- Reports card -->
+      <article id="reports"
+               class="group flex scroll-mt-24 flex-col justify-between rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition-shadow hover:shadow-md dark:border-slate-800 dark:bg-slate-900 md:p-6">
+        <div class="flex flex-col gap-4">
+          <div class="flex items-start justify-between gap-3">
+            <div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-emerald-600 transition-transform group-hover:scale-105 dark:bg-slate-800/60 dark:text-emerald-400">
+              {% icon 'bar_chart' 'text-[26px]' %}
+            </div>
+            <span class="tnum rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-400">
+              GH₵ {{ today_sales|floatformat:2|intcomma }} Today Gross
+            </span>
+          </div>
+
+          <div>
+            <h3 class="text-lg font-bold tracking-tight text-slate-900 dark:text-slate-100">
+              Sales &amp; Revenue Reports
+            </h3>
+            <p class="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
+              View daily takings, profit margins, cashier totals, and export accounting sheets.
+            </p>
+          </div>
+
+          <div class="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs font-semibold text-slate-500 dark:text-slate-400">
+            <span class="inline-flex items-center gap-1">
+              {% icon 'pie_chart' 'text-[16px] text-emerald-600 dark:text-emerald-400' %}
+              Daily Takings &amp; Profit
+            </span>
+            <span class="inline-flex items-center gap-1">
+              {% icon 'table_view' 'text-[16px] text-slate-600 dark:text-slate-300' %}
+              Excel / CSV Export
+            </span>
+          </div>
+        </div>
+
+        <div class="mt-5 flex flex-col gap-2 border-t border-slate-200 pt-4 dark:border-slate-800 lg:flex-row lg:items-center">
+          <a href="{% url 'core:orders' %}?view=reports"
+             class="inline-flex min-h-[40px] flex-1 items-center justify-center gap-2 whitespace-nowrap rounded-lg bg-slate-100 px-4 py-2.5 text-xs font-semibold text-slate-900 transition-colors hover:bg-slate-200 dark:bg-slate-800/60 dark:text-slate-100 dark:hover:bg-slate-800">
+            <span>View Daily Report</span>
+            {% icon 'arrow_forward' 'text-[18px]' %}
+          </a>
+          <a href="{% url 'core:orders' %}?view=reports"
+             class="inline-flex min-h-[40px] items-center justify-center gap-1.5 whitespace-nowrap rounded-lg border border-slate-200 bg-white px-3.5 py-2.5 text-xs font-semibold text-slate-900 transition-colors hover:bg-slate-100 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-100 dark:hover:bg-slate-800/60">
+            {% icon 'download' 'text-[18px] text-slate-500 dark:text-slate-400' %}
+            <span>Download CSV</span>
+          </a>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <!-- ========================================================== -->
+  <!-- 3. Today's store snapshot                                 -->
+  <!-- ========================================================== -->
+  <section class="flex flex-col gap-4">
+    <div class="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+      <div>
+        <h2 class="text-lg font-bold tracking-tight text-slate-900 dark:text-slate-100 md:text-xl">
+          Today's Store Snapshot
+        </h2>
+        <p class="mt-0.5 text-sm text-slate-500 dark:text-slate-400">
+          Essential metrics for Store #01 today
+        </p>
+      </div>
+      <span class="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 dark:text-slate-400">
+        <span class="h-2 w-2 animate-pulse rounded-full bg-emerald-500 dark:bg-emerald-400"
+              aria-hidden="true"></span>
+        Live update
+      </span>
+    </div>
+
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <!-- Total sales -->
+      <div class="flex flex-col justify-between rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <div class="flex items-center justify-between gap-2">
+          <span class="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500 dark:text-slate-400">
+            Today's Total Sales
+          </span>
+          {% icon 'account_balance_wallet' 'text-[20px] text-emerald-600 dark:text-emerald-400' %}
+        </div>
+        <div class="mt-3">
+          <div class="flex items-baseline gap-1">
+            <span class="text-xs font-semibold text-slate-500 dark:text-slate-400">GH₵</span>
+            <span class="tnum text-3xl font-bold tracking-tight text-slate-900 dark:text-slate-100 md:text-4xl">
+              {{ today_sales|floatformat:2|intcomma }}
+            </span>
+          </div>
+          {% if sales_change is not None %}
+            <div class="mt-1 flex items-center gap-1 text-xs font-semibold {% if sales_change_positive %}text-emerald-600 dark:text-emerald-400{% else %}text-rose-600 dark:text-rose-400{% endif %}">
+              {% if sales_change_positive %}{% icon 'trending_up' 'text-[16px]' %}{% else %}{% icon 'trending_down' 'text-[16px]' %}{% endif %}
+              <span class="tnum">
+                {% if sales_change_positive %}+{% endif %}{{ sales_change }}% compared to yesterday
+              </span>
+            </div>
+          {% else %}
+            <div class="mt-1 flex items-center gap-1 text-xs font-semibold text-slate-500 dark:text-slate-400">
+              {% icon 'info' 'text-[16px]' %}
+              <span>No sales yesterday to compare</span>
+            </div>
+          {% endif %}
+        </div>
+      </div>
+
+      <!-- Completed orders -->
+      <div class="flex flex-col justify-between rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <div class="flex items-center justify-between gap-2">
+          <span class="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500 dark:text-slate-400">
+            Completed Orders
+          </span>
+          {% icon 'shopping_bag' 'text-[20px] text-slate-500 dark:text-slate-400' %}
+        </div>
+        <div class="mt-3">
+          <div class="flex items-baseline gap-1.5">
+            <span class="tnum text-3xl font-bold tracking-tight text-slate-900 dark:text-slate-100 md:text-4xl">
+              {{ orders_today|intcomma }}
+            </span>
+            <span class="text-sm font-medium text-slate-500 dark:text-slate-400">
+              receipt{{ orders_today|pluralize }}
+            </span>
+          </div>
+          <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+            Today at Store #01
+          </p>
+        </div>
+      </div>
+
+      <!-- Restock alert -->
+      <div class="flex flex-col justify-between rounded-2xl border border-slate-200 border-l-4 border-l-rose-500 bg-white p-5 shadow-sm dark:border-slate-800 dark:border-l-rose-500 dark:bg-slate-900">
+        <div class="flex items-center justify-between gap-2">
+          <span class="text-[11px] font-semibold uppercase tracking-[0.08em] text-rose-600 dark:text-rose-400">
+            Products Needing Restock
+          </span>
+          {% icon 'warning' 'text-[20px] text-rose-500 dark:text-rose-400' %}
+        </div>
+        <div class="mt-2">
+          <div class="flex items-baseline gap-1.5">
+            <span class="tnum text-3xl font-bold tracking-tight text-rose-600 dark:text-rose-400 md:text-4xl">
+              {{ out_of_stock_count }}
+            </span>
+            <span class="text-sm text-slate-500 dark:text-slate-400">items at 0 stock</span>
+          </div>
+          <p class="mt-1 line-clamp-1 text-xs text-slate-500 dark:text-slate-400">
+            {% if restock_products %}
+              {{ restock_products|join:", " }}
+            {% else %}
+              All products are in stock
+            {% endif %}
+          </p>
+          <a href="{% url 'core:products' %}?view=out-of-stock"
+             class="group mt-2 inline-flex items-center gap-1 text-xs font-semibold text-emerald-600 hover:text-emerald-700 dark:text-emerald-400 dark:hover:text-emerald-300">
+            <span>Order Stock Now</span>
+            {% icon 'arrow_forward' 'text-[16px] transition-transform group-hover:translate-x-0.5' %}
+          </a>
+        </div>
+      </div>
+
+      <!-- Sales by cashier -->
+      <div class="flex flex-col justify-between rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <div class="flex items-center justify-between gap-2">
+          <span class="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500 dark:text-slate-400">
+            Sales by Cashier
+          </span>
+          {% icon 'payments' 'text-[20px] text-slate-500 dark:text-slate-400' %}
+        </div>
+        <div class="mt-2 flex flex-col gap-1.5 text-xs">
+          {% for cashier in cashier_sales %}
+            <div class="flex items-center justify-between gap-3">
+              <span class="flex min-w-0 items-center gap-1.5 text-slate-600 dark:text-slate-300">
+                <span class="h-2 w-2 shrink-0 rounded-full {% cycle 'bg-sky-500 dark:bg-sky-400' 'bg-slate-400 dark:bg-slate-500' 'bg-indigo-500 dark:bg-indigo-400' %}"
+                      aria-hidden="true"></span>
+                <span class="truncate">{{ cashier.name }}</span>
+              </span>
+              <span class="tnum shrink-0 font-semibold text-slate-900 dark:text-slate-100">
+                GH₵ {{ cashier.total|floatformat:2|intcomma }}
+              </span>
+            </div>
+          {% empty %}
+            <p class="text-slate-500 dark:text-slate-400">No cashier sales recorded today.</p>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========================================================== -->
+  <!-- 4. Recent transactions + quick tools                      -->
+  <!-- ========================================================== -->
+  <section class="grid grid-cols-1 gap-6 lg:grid-cols-3">
+    <!-- Recent transactions -->
+    <div class="flex flex-col justify-between rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900 md:p-6 lg:col-span-2">
+      <div class="flex flex-col gap-2 border-b border-slate-200 pb-4 dark:border-slate-800 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h3 class="text-base font-bold tracking-tight text-slate-900 dark:text-slate-100">
+            Recent Customer Transactions
+          </h3>
+          <p class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+            Latest checkouts processed at Store #01
+          </p>
+        </div>
+        <a href="{% url 'core:orders' %}?view=orders"
+           class="inline-flex items-center gap-1 text-xs font-semibold text-emerald-600 hover:text-emerald-700 dark:text-emerald-400 dark:hover:text-emerald-300">
+          <span>See All Receipts in Orders</span>
+          {% icon 'arrow_forward' 'text-[16px]' %}
+        </a>
+      </div>
+
+      <div class="mt-2 w-full overflow-x-auto">
+        <table class="w-full min-w-[560px] border-collapse text-left text-sm">
+          <caption class="sr-only">
+            Recent customer transactions at Store #01
+          </caption>
+          <thead>
+            <tr class="border-b border-slate-200 text-[10px] uppercase tracking-[0.08em] text-slate-500 dark:border-slate-800 dark:text-slate-400">
+              <th scope="col" class="whitespace-nowrap py-2.5 pr-2 font-semibold">Receipt #</th>
+              <th scope="col" class="whitespace-nowrap px-2 py-2.5 font-semibold">
+                Purchased Items
+              </th>
+              <th scope="col" class="whitespace-nowrap px-2 py-2.5 font-semibold">Payment</th>
+              <th scope="col" class="whitespace-nowrap px-2 py-2.5 font-semibold">Cashier</th>
+              <th scope="col" class="whitespace-nowrap px-2 py-2.5 text-right font-semibold">
+                Total
+              </th>
+              <th scope="col" class="whitespace-nowrap py-2.5 pl-2 text-right font-semibold">
+                Time
+              </th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
+            {% for order in recent_orders %}
+              {% with items=order.orderitem_set.all %}
+                <tr class="transition-colors hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                  <td class="whitespace-nowrap py-3 pr-2">
+                    <a href="{% url 'core:orders' %}?view=orders"
+                       class="tnum text-xs font-bold text-emerald-600 hover:underline dark:text-emerald-400">
+                      #NC-{{ order.code }}
+                    </a>
+                  </td>
+                  <td class="px-2 py-3">
+                    <div class="flex flex-col">
+                      <span class="font-medium text-slate-900 dark:text-slate-100">
+                        {% if items %}{{ items.0.product.name }}{% else %}No items recorded{% endif %}
+                      </span>
+                      <span class="text-[11px] text-slate-500 dark:text-slate-400">
+                        {% if items|length > 1 %}
+                          + {{ items|length|add:"-1" }} other item{{ items|length|add:"-1"|pluralize }}
+                        {% else %}
+                          {{ items|length }} unit{{ items|length|pluralize }}
+                        {% endif %}
+                      </span>
+                    </div>
+                  </td>
+                  <td class="whitespace-nowrap px-2 py-3">
+                    <span class="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-400">
+                      {% icon 'check_circle' 'text-[12px]' %}
+                      Paid
+                    </span>
+                  </td>
+                  <td class="whitespace-nowrap px-2 py-3 font-medium text-slate-900 dark:text-slate-100">
+                    {{ order.user.get_full_name|default:order.user.username }}
+                  </td>
+                  <td class="tnum whitespace-nowrap px-2 py-3 text-right text-sm font-bold text-slate-900 dark:text-slate-100">
+                    GH₵ {{ order.overall_amount_paid|floatformat:2|intcomma }}
+                  </td>
+                  <td class="whitespace-nowrap py-3 pl-2 text-right text-xs text-slate-500 dark:text-slate-400">
+                    {{ order.created|naturaltime }}
+                  </td>
+                </tr>
+              {% endwith %}
+            {% empty %}
+              <tr>
+                <td colspan="6" class="px-2 py-10 text-center text-sm text-slate-500 dark:text-slate-400">
+                  No customer transactions yet.
+                  <a href="{% url 'core:orders' %}?view=pos"
+                     class="font-semibold text-emerald-600 hover:underline dark:text-emerald-400">
+                    Start a sale
+                  </a>.
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="mt-4 flex flex-col gap-2 border-t border-slate-200 pt-3 text-xs text-slate-500 dark:border-slate-800 dark:text-slate-400 sm:flex-row sm:items-center sm:justify-between">
+        <span>
+          {% if recent_orders %}
+            Showing latest {{ recent_orders|length }} settled customer receipt{{ recent_orders|length|pluralize }}
+          {% else %}
+            No settled customer receipts yet
+          {% endif %}
+        </span>
+        <a href="{% url 'core:orders' %}?view=orders"
+           class="inline-flex items-center gap-1 font-semibold text-emerald-600 hover:underline dark:text-emerald-400">
+          Open Full Ledger
+          {% icon 'arrow_forward' 'text-[14px]' %}
+        </a>
+      </div>
+    </div>
+
+    <!-- Quick store tools -->
+    <div class="flex flex-col justify-between gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900 md:p-6">
+      <div>
+        <h3 class="text-base font-bold tracking-tight text-slate-900 dark:text-slate-100">
+          Quick Store Tools
+        </h3>
+        <p class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+          Routine cashier utilities and hardware tests
+        </p>
+      </div>
+
+      <div class="flex flex-col gap-3">
+        <a href="{% url 'core:orders' %}?view=pos"
+           class="group flex w-full items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-100 p-3.5 text-left transition-colors hover:bg-slate-200/70 dark:border-slate-800 dark:bg-slate-800/60 dark:hover:bg-slate-800">
+          <span class="flex min-w-0 items-center gap-3">
+            <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-white text-emerald-600 transition-transform group-hover:scale-105 dark:bg-slate-900 dark:text-emerald-400">
+              {% icon 'qr_code_scanner' 'text-[22px]' %}
+            </span>
+            <span class="min-w-0">
+              <span class="block text-xs font-semibold text-slate-900 dark:text-slate-100">
+                Barcodes &amp; Scanner Test
+              </span>
+              <span class="block text-xs text-slate-500 dark:text-slate-400">
+                Verify handheld laser &amp; camera
+              </span>
+            </span>
+          </span>
+          {% icon 'chevron_right' 'shrink-0 text-[18px] text-slate-400 transition-transform group-hover:translate-x-0.5 group-hover:text-slate-600 dark:text-slate-500 dark:group-hover:text-slate-300' %}
+        </a>
+
+        <a href="{% url 'core:orders' %}?view=reports"
+           class="group flex w-full items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-100 p-3.5 text-left transition-colors hover:bg-slate-200/70 dark:border-slate-800 dark:bg-slate-800/60 dark:hover:bg-slate-800">
+          <span class="flex min-w-0 items-center gap-3">
+            <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-white text-slate-600 transition-transform group-hover:scale-105 dark:bg-slate-900 dark:text-slate-300">
+              {% icon 'balance' 'text-[22px]' %}
+            </span>
+            <span class="min-w-0">
+              <span class="block text-xs font-semibold text-slate-900 dark:text-slate-100">
+                Shift Cash Reconciliation
+              </span>
+              <span class="block text-xs text-slate-500 dark:text-slate-400">
+                Review sales &amp; close shift
+              </span>
+            </span>
+          </span>
+          {% icon 'chevron_right' 'shrink-0 text-[18px] text-slate-400 transition-transform group-hover:translate-x-0.5 group-hover:text-slate-600 dark:text-slate-500 dark:group-hover:text-slate-300' %}
+        </a>
+
+        <a href="mailto:support@noblecosmetics.com"
+           class="group flex w-full items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-100 p-3.5 text-left transition-colors hover:bg-slate-200/70 dark:border-slate-800 dark:bg-slate-800/60 dark:hover:bg-slate-800">
+          <span class="flex min-w-0 items-center gap-3">
+            <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-white text-emerald-600 transition-transform group-hover:scale-105 dark:bg-slate-900 dark:text-emerald-400">
+              {% icon 'help_center' 'text-[22px]' %}
+            </span>
+            <span class="min-w-0">
+              <span class="block text-xs font-semibold text-slate-900 dark:text-slate-100">
+                Help &amp; Support
+              </span>
+              <span class="block text-xs text-slate-500 dark:text-slate-400">
+                Store hotline and training manual
+              </span>
+            </span>
+          </span>
+          {% icon 'chevron_right' 'shrink-0 text-[18px] text-slate-400 transition-transform group-hover:translate-x-0.5 group-hover:text-slate-600 dark:text-slate-500 dark:group-hover:text-slate-300' %}
+        </a>
+      </div>
+
+      <div class="flex items-start gap-3 rounded-xl bg-slate-100 p-3.5 dark:bg-slate-800/60">
+        {% icon 'keyboard' 'text-[24px] text-emerald-600 dark:text-emerald-400' %}
+        <div class="min-w-0">
+          <span class="block text-xs font-semibold text-slate-900 dark:text-slate-100">
+            Cashier Hotkey Tip
+          </span>
+          <span class="block text-xs text-slate-500 dark:text-slate-400">
+            Press
+            <kbd class="rounded border border-slate-300 bg-white px-1.5 py-0.5 font-mono text-[10px] font-semibold text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200">
+              F2
+            </kbd>
+            anywhere to start a new sale register
+          </span>
+        </div>
+      </div>
+    </div>
+  </section>
 {% endblock content %}

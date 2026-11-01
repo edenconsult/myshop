@@ -1,41 +1,87 @@
 {% load humanize %}
-<div class="flex flex-col px-3 py-2 space-y-5 bg-green-200 border-2 border-green-300">
-  <div class="flex items-center justify-between w-full">
-    <h3 class="text-sm font-semibold border-b-2 border-gray-500">Order: <b>{{ order.code }}</b></h3>
-    <h3 class="text-xs">Made By: <b>{{ order.user }}</b></h3>
-  </div>
-  <div>
-    <table class="w-full text-xs text-left text-gray-500 border-collapse table-fixed dark:text-gray-400">
-      <thead class="text-xs text-gray-700 uppercase bg-gray-50 dark:bg-gray-700 dark:text-gray-400">
-        <tr class="flex">
-          <th scope="col" class="flex-1 px-3 py-2 text-center">Item Name</th>
-          <th scope="col" class="flex-1 px-3 py-2 text-center">Qty Bought</th>
-          <th scope="col" class="flex-1 px-3 py-2 text-center">Total Cost</th>
-        </tr>
-      </thead>
-      <tbody class="overflow-y-auto block h-[350px]" id="tbody">
-        {% for order_item in order.orderitem_set.all %}
-          <tr class="flex items-center bg-white border-b dark:bg-gray-800 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600">
-            <td class="flex-1 px-3 py-2 font-medium text-center text-gray-900 dark:text-white">{{ order_item.product }}</td>
-            <td class="flex-1 px-3 py-2 text-center">{{ order_item.qty_bought }}</td>
-            <td class="flex-1 px-3 py-2 text-center">GHs{{ order_item.paid_amount }}</td>
-          </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-  <div class="flex items-center justify-between w-full px-3 py-4 bg-green-200 border-2 border-green-300">
-    <div class="flex flex-col space-y-1">
-      <h4 class="text-sm font-light">
-        Total Amount Paid:  <span class="font-semibold">GHs {{ order.overall_amount_paid }}</span>
-      </h4>
-      <span class="text-[10px] text-gray-600">Order Completed On: {{ order.created }}</span>
+{% load icons %}
+{# Receipt inspector card — swapped into #order_details from a ledger row click. #}
+<div class="flex flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-md dark:border-slate-800 dark:bg-slate-900">
+  <div class="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-4 py-3.5 dark:border-slate-800 dark:bg-slate-950/40">
+    <div class="flex min-w-0 items-center gap-2.5">
+      <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-emerald-600 text-white dark:bg-emerald-500 dark:text-slate-950">
+        {% icon 'receipt' 'text-[18px]' %}
+      </span>
+      <div class="min-w-0">
+        <h3 class="truncate text-base font-semibold text-slate-900 dark:text-slate-100">
+          Order #<span class="tnum">{{ order.code }}</span>
+        </h3>
+        <p class="text-xs text-slate-500 dark:text-slate-400">
+          {{ order.created|date:"M j, Y" }} • {{ order.created|time:"H:i" }}
+        </p>
+      </div>
     </div>
-    <div>
-    <a href="{% url 'core:print-order-pdf' order.id order_number %}"
-            class="text-[10px] text-white bg-gradient-to-r from-gray-500 via-gray-600 to-gray-700 hover:bg-gradient-to-br focus:ring-4 focus:outline-none focus:ring-gray-300 dark:focus:ring-gray-800 shadow-lg shadow-gray-500/50 dark:shadow-lg dark:shadow-gray-800/80 font-medium rounded-lg text-sm px-5 py-2.5 text-center mr-2 mb-2 ">
-      Download Receipt
-    </a>
+    <button type="button"
+            onclick="if (window.closeLedgerInspector) window.closeLedgerInspector()"
+            class="rounded-lg p-1 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-100"
+            title="Close panel">
+      {% icon 'close' 'text-[20px]' %}
+      <span class="sr-only">Close panel</span>
+    </button>
   </div>
+
+  <div class="flex max-h-[calc(100vh-13rem)] flex-col gap-3 overflow-y-auto p-4">
+    <div class="grid grid-cols-2 gap-2 rounded-lg bg-slate-50 p-3 text-xs dark:bg-slate-950/40">
+      <div>
+        <span class="block text-[11px] font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Cashier</span>
+        <span class="text-sm font-semibold text-slate-900 dark:text-slate-100">{{ order.user.get_full_name|default:order.user.username }}</span>
+      </div>
+      <div>
+        <span class="block text-[11px] font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Customer</span>
+        <span class="block truncate text-sm font-semibold text-slate-900 dark:text-slate-100">{{ order.customer_name|default:"Walk-in Customer" }}</span>
+      </div>
+    </div>
+
+    <div class="flex flex-col gap-1">
+      <div class="flex items-center justify-between border-b border-slate-200 pb-1 text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:border-slate-800 dark:text-slate-400">
+        <span>Item Description</span>
+        <span>Subtotal</span>
+      </div>
+      <div class="divide-y divide-slate-100 dark:divide-slate-800">
+        {% for order_item in order.orderitem_set.all %}
+          <div class="flex items-center justify-between gap-3 py-2.5">
+            <div class="flex min-w-0 items-center gap-2.5">
+              <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-sm font-bold uppercase text-emerald-700 dark:bg-slate-800 dark:text-emerald-400"
+                    aria-hidden="true">{{ order_item.product.name|slice:":1" }}</span>
+              <div class="min-w-0">
+                <div class="truncate text-xs font-semibold text-slate-900 dark:text-slate-100">{{ order_item.product.name }}</div>
+                <div class="tnum text-xs text-slate-500 dark:text-slate-400">Qty: {{ order_item.qty_bought }}</div>
+              </div>
+            </div>
+            <div class="tnum shrink-0 whitespace-nowrap text-base font-semibold text-slate-900 dark:text-slate-100">
+              GH₵ {{ order_item.paid_amount|floatformat:2|intcomma }}
+            </div>
+          </div>
+        {% empty %}
+          <p class="py-3 text-center text-xs text-slate-500 dark:text-slate-400">This receipt has no recorded line items.</p>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="flex flex-col gap-2 rounded-lg bg-slate-50 p-3.5 text-xs dark:bg-slate-950/40">
+      <div class="flex items-center justify-between text-slate-500 dark:text-slate-400">
+        <span>Items sold</span>
+        <span class="tnum font-medium text-slate-900 dark:text-slate-100">{{ order.orderitem_set.count }}</span>
+      </div>
+      <div class="mt-1 flex items-baseline justify-between border-t border-slate-200 pt-2 dark:border-slate-800">
+        <span class="text-sm font-semibold text-slate-900 dark:text-slate-100">Total Paid</span>
+        <span class="tnum text-[26px] font-bold text-emerald-700 dark:text-emerald-400">
+          GH₵ {{ order.overall_amount_paid|floatformat:2|intcomma }}
+        </span>
+      </div>
+    </div>
+
+    <div class="flex flex-col gap-2 pt-1">
+      <a href="{% url 'core:print-order-pdf' order.id order_number %}"
+         class="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-3 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-emerald-700 dark:bg-emerald-500 dark:text-slate-950 dark:hover:bg-emerald-400">
+        {% icon 'print' 'text-[19px]' %}
+        <span>Download Receipt PDF</span>
+      </a>
+    </div>
   </div>
 </div>

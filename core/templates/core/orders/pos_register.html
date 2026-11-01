@@ -1,0 +1,113 @@
+{% load humanize %}
+{% load icons %}
+<div class="flex flex-col gap-4"
+     x-data="{
+       items: [],
+       order_url: '{% url 'core:make-order' %}',
+       money(value) { return Number(value).toFixed(2) },
+       line(item) { return this.money(item.price * item.qty) },
+       subtotal() { return this.money(this.items.reduce((sum, i) => sum + i.price * i.qty, 0)) },
+       units() { return this.items.reduce((sum, i) => sum + i.qty, 0) },
+       add_to_card(id, name, stock, price) {
+         const picked = this.items.find(i => i.id === id);
+         if (picked) { if (picked.qty < stock) picked.qty += 1; return }
+         this.items.push({ id, name, stock, qty: 1, price });
+       },
+       inc(item) { if (item.qty < item.stock) item.qty += 1 },
+       dec(item) { if (item.qty > 1) item.qty -= 1 },
+       remove(item) { this.items = this.items.filter(i => i.id !== item.id) },
+       clear() { this.items = [] },
+       checkout() {
+         if (this.items.length === 0) return;
+         const cart = this.items.map(i => ({
+           id: i.id, name: i.name, stock: i.stock, qty: i.qty, price: i.price,
+           total_price: this.money(i.price * i.qty),
+         }));
+         htmx.ajax('POST', this.order_url, { target: '#cart', swap: 'innerHTML', values: { items: cart } });
+       }
+     }">
+
+  {# ---------- Status & shortcut bar ---------- #}
+  <div class="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+    <div class="flex flex-wrap items-center gap-x-4 gap-y-2">
+      <span class="flex items-center gap-2">
+        <span class="h-2.5 w-2.5 shrink-0 animate-pulse rounded-full bg-emerald-500 dark:bg-emerald-400" aria-hidden="true"></span>
+        <span class="text-xs font-semibold tracking-wide text-slate-900 dark:text-slate-100">Register Open</span>
+        <span class="text-xs text-slate-500 dark:text-slate-400">Store #01 · {{ request.user.get_full_name|default:request.user.username }}</span>
+      </span>
+      <span class="hidden h-5 w-px bg-slate-200 dark:bg-slate-800 sm:block" aria-hidden="true"></span>
+      <span class="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
+        {% icon 'payments' 'text-[16px] text-emerald-600 dark:text-emerald-400' %}
+        <span>Today's Takings:</span>
+        <strong class="tnum text-sm font-semibold text-slate-900 dark:text-slate-100">GH₵ {{ today_takings|floatformat:2|intcomma }}</strong>
+      </span>
+      <span class="hidden h-5 w-px bg-slate-200 dark:bg-slate-800 sm:block" aria-hidden="true"></span>
+      <span class="tnum text-xs text-slate-500 dark:text-slate-400">{{ page_obj.paginator.count|intcomma }} products sellable</span>
+    </div>
+    <div class="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">
+      <span class="flex items-center gap-1 rounded-lg bg-slate-100 px-2 py-1 dark:bg-slate-800/60">
+        <kbd class="tnum rounded bg-white px-1.5 py-0.5 font-semibold text-slate-900 shadow-sm dark:bg-slate-900 dark:text-slate-100">/</kbd>
+        <span>Search</span>
+      </span>
+      <span class="hidden items-center gap-1 rounded-lg bg-slate-100 px-2 py-1 sm:flex dark:bg-slate-800/60">
+        <kbd class="tnum rounded bg-white px-1.5 py-0.5 font-semibold text-slate-900 shadow-sm dark:bg-slate-900 dark:text-slate-100">F2</kbd>
+        <span>New Sale</span>
+      </span>
+    </div>
+  </div>
+
+  {# ---------- Split-screen register stage ---------- #}
+  <div class="grid grid-cols-1 items-start gap-4 lg:grid-cols-12">
+
+    {# ===== Left: catalog search + quick-pick grid ===== #}
+    <section class="flex flex-col gap-3 lg:col-span-7 xl:col-span-8" aria-label="Product catalog">
+      <div class="rounded-xl border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <label class="sr-only" for="table-search">Search products</label>
+        <div class="relative">
+          {% icon 'search' 'pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[20px] text-slate-500 dark:text-slate-400' %}
+          <input type="text"
+                 id="table-search"
+                 name="s"
+                 autocomplete="off"
+                 hx-get="{% url 'core:load-orders-products' %}?p=1"
+                 hx-trigger="keyup changed delay:300ms"
+                 hx-target="#pos-grid"
+                 hx-swap="innerHTML"
+                 class="h-11 w-full rounded-lg border border-slate-200 bg-slate-50 pl-10 pr-20 text-sm text-slate-900 placeholder:text-slate-500 focus:border-emerald-600 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-600/30 sm:text-base dark:border-slate-800 dark:bg-slate-950 dark:text-slate-100 dark:focus:bg-slate-950 dark:focus:border-emerald-500"
+                 placeholder="Search products by name...">
+          <span class="tnum absolute right-3 top-1/2 -translate-y-1/2 rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-medium uppercase tracking-wider text-slate-500 dark:bg-slate-800/60 dark:text-slate-400">Press /</span>
+        </div>
+      </div>
+
+      <div id="pos-grid"
+           class="grid grid-cols-2 gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 shadow-sm sm:grid-cols-3 xl:grid-cols-4 dark:border-slate-800 dark:bg-slate-900/40"
+           hx-get="{% url 'core:load-orders-products' %}?p=1&s="
+           hx-target="this"
+           hx-swap="innerHTML"
+           hx-trigger="reload_products_with_stocks from:body">
+        {% include "core/orders/pos_product_cards.html" %}
+      </div>
+    </section>
+
+    {# ===== Right: live cart & settlement console ===== #}
+    <aside class="lg:sticky lg:top-20 lg:col-span-5 xl:col-span-4" aria-label="Customer cart">
+      <div id="cart">{% include "core/orders/pos_cart_panel.html" %}</div>
+    </aside>
+  </div>
+
+  <script>
+    (() => {
+      if (window.__posSearchShortcut) return;
+      window.__posSearchShortcut = (event) => {
+        if (event.key !== "/") return;
+        const active = document.activeElement;
+        if (active && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName)) return;
+        const search = document.getElementById("table-search");
+        if (!search) return;
+        event.preventDefault();
+        search.focus();
+      };
+      document.addEventListener("keydown", window.__posSearchShortcut);
+    })();
+  </script>
+</div>

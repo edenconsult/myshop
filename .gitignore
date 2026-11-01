@@ -22,6 +22,9 @@ productionfiles/
 staticfiles/
 static/CACHE/
 
+# Uploaded media (product photos)
+media/
+
 # Local docs & test files
 noble_cosmetics.ods
 *.pdf

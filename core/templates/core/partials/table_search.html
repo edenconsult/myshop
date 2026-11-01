@@ -1,66 +1,184 @@
 {% load humanize %}
-<div class="relative px-4 py-3 shadow-md sm:rounded-lg">
-  <div class="flex items-center justify-between pb-4">
-    <div>
-      <h2 class="text-xl font-semibold border-b-2 border-gray-800">All Products</h2>
+{% load icons %}
+<div class="overflow-hidden rounded-xl bg-white shadow-sm ring-1 ring-slate-200/70 dark:bg-slate-900 dark:ring-slate-800">
+  <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3 dark:border-slate-800">
+    <div class="flex items-center gap-1 rounded-lg bg-slate-100 p-1 dark:bg-slate-800">
+      <a href="{% url 'core:products' %}"
+         hx-get="{% url 'core:load-products' %}?l={{ limit }}&p=1&status=all"
+         hx-include="#ledger-filters"
+         hx-params="s,c,sort"
+         hx-target="#results"
+         hx-swap="innerHTML"
+         {% if status == 'all' %}aria-current="page"{% endif %}
+         class="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm transition-all {% if status == 'all' %}bg-white font-semibold text-emerald-700 shadow-sm dark:bg-slate-950 dark:text-emerald-400{% else %}font-medium text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100{% endif %}">
+        <span>All Products</span>
+      </a>
+      <a href="{% url 'core:products' %}?view=out-of-stock"
+         hx-get="{% url 'core:load-products' %}?l={{ limit }}&p=1&status=alert"
+         hx-include="#ledger-filters"
+         {# htmx appends the included controls after this query string and the #}
+         {# view keeps the last ?status, so the tabs drop the select's own value. #}
+         hx-params="s,c,sort"
+         hx-target="#results"
+         hx-swap="innerHTML"
+         {% if status == 'alert' %}aria-current="page"{% endif %}
+         class="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm transition-all {% if status == 'alert' %}bg-white font-semibold text-emerald-700 shadow-sm dark:bg-slate-950 dark:text-emerald-400{% else %}font-medium text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100{% endif %}">
+        <span>Low &amp; Out of Stock</span>
+      </a>
     </div>
-    <label for="table-search" class="sr-only">Search</label>
-    <div class="relative">
-      <div class="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
-        <svg class="w-5 h-5 text-gray-500 dark:text-gray-400"
-             aria-hidden="true"
-             fill="currentColor"
-             viewBox="0 0 20 20"
-             xmlns="http://www.w3.org/2000/svg">
-          <path fill-rule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z" clip-rule="evenodd">
-          </path>
-        </svg>
-      </div>
+    <p class="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
+      <span class="h-2 w-2 rounded-full bg-emerald-600 dark:bg-emerald-400" aria-hidden="true"></span>
+      <span>{{ number_of_products|intcomma }} entr{{ number_of_products|pluralize:"y,ies" }} match this view</span>
+    </p>
+  </div>
+
+  <div id="ledger-filters"
+       class="grid grid-cols-1 gap-2 border-b border-slate-200 px-4 py-3 sm:grid-cols-2 lg:grid-cols-12 dark:border-slate-800">
+    <label for="table-search" class="sr-only">Search products</label>
+    <div class="relative lg:col-span-5">
+      {% icon 'search' 'pointer-events-none absolute left-3 top-2 text-[18px] text-slate-400' %}
       <input type="text"
              id="table-search"
              name="s"
              value="{{ search_term }}"
-             hx-get="{% url 'core:load-products' %}?l=10&p=1"
+             hx-get="{% url 'core:load-products' %}?l={{ limit }}&p=1"
+             hx-include="#ledger-filters"
              hx-trigger="keyup changed delay:500ms"
              hx-target="#results"
-             class="block p-2 pl-10 text-sm text-gray-900 border border-gray-300 rounded-lg w-80 bg-gray-50 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500"
-             placeholder="Search for items">
+             hx-swap="innerHTML"
+             class="block w-full rounded-lg border border-slate-200 bg-slate-50 py-2 pl-9 pr-14 text-sm text-slate-900 placeholder:text-slate-400 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+             placeholder="Search product name or SKU…">
+      <kbd class="pointer-events-none absolute right-2.5 top-2 rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400">/</kbd>
+    </div>
+
+    <div class="lg:col-span-3">
+      <label for="category-filter" class="sr-only">Category</label>
+      <select id="category-filter"
+              name="c"
+              hx-get="{% url 'core:load-products' %}?l={{ limit }}&p=1"
+              hx-include="#ledger-filters"
+              hx-trigger="change"
+              hx-target="#results"
+              hx-swap="innerHTML"
+              class="w-full cursor-pointer rounded-lg border border-slate-200 bg-white py-2 px-3 text-sm text-slate-700 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200">
+        <option value="">All categories</option>
+        {% for value, label in categories %}
+          <option value="{{ value }}" {% if category == value %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <div class="lg:col-span-2">
+      <label for="status-filter" class="sr-only">Stock status</label>
+      <select id="status-filter"
+              name="status"
+              hx-get="{% url 'core:load-products' %}?l={{ limit }}&p=1"
+              hx-include="#ledger-filters"
+              hx-trigger="change"
+              hx-target="#results"
+              hx-swap="innerHTML"
+              class="w-full cursor-pointer rounded-lg border border-slate-200 bg-white py-2 px-3 text-sm text-slate-700 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200">
+        <option value="all" {% if status == 'all' %}selected{% endif %}>All inventory</option>
+        <option value="alert" {% if status == 'alert' %}selected{% endif %}>Low &amp; out of stock</option>
+        <option value="in_stock" {% if status == 'in_stock' %}selected{% endif %}>In stock</option>
+        <option value="low" {% if status == 'low' %}selected{% endif %}>Low stock</option>
+        <option value="out_of_stock" {% if status == 'out_of_stock' %}selected{% endif %}>Out of stock</option>
+      </select>
+    </div>
+
+    <div class="lg:col-span-2">
+      <label for="sort-order" class="sr-only">Sort order</label>
+      <select id="sort-order"
+              name="sort"
+              hx-get="{% url 'core:load-products' %}?l={{ limit }}&p=1"
+              hx-include="#ledger-filters"
+              hx-trigger="change"
+              hx-target="#results"
+              hx-swap="innerHTML"
+              class="w-full cursor-pointer rounded-lg border border-slate-200 bg-white py-2 px-3 text-sm text-slate-700 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200">
+        <option value="updated" {% if sort == 'updated' %}selected{% endif %}>Recently updated</option>
+        <option value="stock_asc" {% if sort == 'stock_asc' %}selected{% endif %}>Stock: low to high</option>
+        <option value="stock_desc" {% if sort == 'stock_desc' %}selected{% endif %}>Stock: high to low</option>
+        <option value="price_desc" {% if sort == 'price_desc' %}selected{% endif %}>Price: high to low</option>
+        <option value="margin_desc" {% if sort == 'margin_desc' %}selected{% endif %}>Highest margin</option>
+      </select>
     </div>
   </div>
+
   {% if page_obj|length > 0 %}
-    {% with page_obj as products %}
-      <table class="w-full text-xs text-left text-gray-500 dark:text-gray-400">
-        <thead class="text-xs text-gray-700 uppercase bg-gray-50 dark:bg-gray-700 dark:text-gray-400">
-          <tr>
-            <th scope="col" class="p-2">
-              <div class="flex items-center">
-                <input id="checkbox-all-search"
-                       type="checkbox"
-                       @click="toggleAllCheckboxes()"
-                       class="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 dark:focus:ring-blue-600 dark:ring-offset-gray-800 dark:focus:ring-offset-gray-800 focus:ring-2 dark:bg-gray-700 dark:border-gray-600">
-                <label for="checkbox-all-search" class="sr-only">checkbox</label>
-              </div>
-            </th>
-            <th scope="col" class="px-4 py-2">Product name</th>
-            <th scope="col" class="px-4 py-2">Stock</th>
-            <th scope="col" class="px-4 py-2">Cost Price</th>
-            <th scope="col" class="px-4 py-2">Selling Price</th>
-            <th scope="col" class="px-4 py-2">Profit Rate</th>
-            <th scope="col" class="px-4 py-2">Last Updated</th>
-            <th scope="col" class="px-4 py-2">Action</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for product in products %}
-            {% include "core/partials/product_table_row.html" %}
-          {% endfor %}
-        </tbody>
-      </table>
-    {% endwith %}
+    <div class="min-w-0">
+      <div x-show="ids.length > 0"
+           x-cloak
+           class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-slate-50 px-4 py-2 dark:border-slate-800 dark:bg-slate-950/40">
+        <p class="text-xs text-slate-600 dark:text-slate-300">
+          <span class="tnum font-semibold text-slate-900 dark:text-slate-100" x-text="ids.length">0</span>
+          selected
+        </p>
+        <button type="button"
+                hx-post="{% url 'core:remove-products-question' %}"
+                hx-vals="js:{ids: getProductIDs()}"
+                hx-target="#modal_root"
+                hx-swap="innerHTML"
+                class="inline-flex items-center gap-1.5 rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-rose-700 dark:bg-rose-500 dark:text-slate-950 dark:hover:bg-rose-400">
+          {% icon 'delete' 'text-[16px]' %}
+          <span>Remove selected</span>
+        </button>
+      </div>
+
+      <div class="overflow-x-auto">
+        <table class="w-full min-w-[1080px] border-collapse text-left text-sm text-slate-600 dark:text-slate-300">
+          <thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-500 dark:bg-slate-950/50 dark:text-slate-400">
+            <tr>
+              <th scope="col" class="w-10 px-3 py-2 text-center">
+                <div class="flex items-center justify-center">
+                  <input id="checkbox-all-search"
+                         type="checkbox"
+                         :checked="allSelected"
+                         @change="toggleAllCheckboxes()"
+                         class="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 dark:border-slate-600 dark:bg-slate-800">
+                  <label for="checkbox-all-search" class="sr-only">Select every row on this page</label>
+                </div>
+              </th>
+              <th scope="col" class="min-w-[220px] px-4 py-2 font-semibold">Product</th>
+              <th scope="col" class="min-w-[110px] px-4 py-2 font-semibold">Category</th>
+              <th scope="col" class="min-w-[120px] px-4 py-2 font-semibold">SKU</th>
+              <th scope="col" class="min-w-[170px] px-4 py-2 font-semibold">Current stock</th>
+              <th scope="col" class="min-w-[100px] px-4 py-2 text-right font-semibold">Cost</th>
+              <th scope="col" class="min-w-[100px] px-4 py-2 text-right font-semibold">Retail</th>
+              <th scope="col" class="min-w-[90px] px-4 py-2 text-right font-semibold">Margin</th>
+              <th scope="col" class="min-w-[110px] px-4 py-2 text-center font-semibold">Actions</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-200 dark:divide-slate-800">
+            {% for product in page_obj %}
+              {% include "core/partials/product_table_row.html" %}
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
     {% include "partials/pagination.html" %}
   {% else %}
-    <div class="px-4 py-2">
-      <h2 class="text-2xl font-medium">No products found</h2>
+    <div class="flex flex-col items-center gap-2 px-4 py-12 text-center">
+      {% icon 'inventory_2' 'text-[32px] text-slate-300 dark:text-slate-600' %}
+      <p class="text-base font-semibold text-slate-900 dark:text-slate-100">No products match this view</p>
+      <p class="text-xs text-slate-500 dark:text-slate-400">
+        {% if search_term %}
+          Nothing is stocked under “{{ search_term }}”.
+        {% elif status != 'all' %}
+          This stock filter has no entries right now.
+        {% else %}
+          The ledger is empty — add a product or import a catalogue.
+        {% endif %}
+      </p>
+      <a href="{% url 'core:products' %}"
+         hx-get="{% url 'core:load-products' %}?l=10&p=1&status=all"
+         hx-target="#results"
+         hx-swap="innerHTML"
+         class="mt-1 rounded-lg bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700">
+        Clear filters
+      </a>
     </div>
   {% endif %}
 </div>

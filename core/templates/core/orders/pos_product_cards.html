@@ -1,0 +1,44 @@
+{% load icons %}
+{% for product in page_obj %}
+  {% cycle 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-400' 'bg-sky-100 text-sky-700 dark:bg-sky-950/60 dark:text-sky-400' 'bg-violet-100 text-violet-700 dark:bg-violet-950/60 dark:text-violet-400' 'bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-400' 'bg-rose-100 text-rose-700 dark:bg-rose-950/60 dark:text-rose-400' 'bg-teal-100 text-teal-700 dark:bg-teal-950/60 dark:text-teal-400' as tile silent %}
+  <button type="button"
+          x-data="{ id: '{{ product.id }}', name: '{{ product.name|escapejs }}', stock: {{ product.stock }}, price: {{ product.price }} }"
+          @click="add_to_card(id, name, stock, price)"
+          {% if forloop.last and page_obj.has_next %}
+          hx-get="{% url 'core:load-orders-products' %}?p={{ page_obj.next_page_number }}"
+          hx-target="this"
+          hx-swap="afterend"
+          hx-trigger="intersect once"
+          hx-vals="js:{ s: document.querySelector('#table-search').value }"
+          {% endif %}
+          class="group relative flex flex-col justify-between rounded-xl border border-slate-200 bg-white p-2 text-left shadow-sm transition-all hover:shadow-md active:scale-[0.98] dark:border-slate-800 dark:bg-slate-900">
+    <span class="relative mb-1 flex aspect-square w-full items-center justify-center overflow-hidden rounded-lg {{ tile }}">
+      {% if product.image %}
+        <img src="{{ product.image.url }}"
+             alt="{{ product.name }}"
+             loading="lazy"
+             class="absolute inset-0 h-full w-full object-cover">
+      {% else %}
+        <span class="text-2xl font-bold uppercase tracking-tight opacity-70" aria-hidden="true">{{ product.name|slugify|slice:":2" }}</span>
+      {% endif %}
+      <span class="tnum absolute right-1.5 top-1.5 rounded-full px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wider shadow-sm {% if product.stock <= product.low_stock_threshold %}bg-amber-200 text-amber-900 dark:bg-amber-400 dark:text-amber-950{% else %}bg-white/90 text-emerald-700 dark:bg-slate-900/90 dark:text-emerald-400{% endif %}">
+        {% if product.stock <= product.low_stock_threshold %}Low: {{ product.stock }} left{% else %}{{ product.stock }} in stock{% endif %}
+      </span>
+    </span>
+    <span class="flex flex-1 flex-col justify-between gap-1">
+      <span class="line-clamp-2 text-sm font-semibold leading-5 text-slate-900 dark:text-slate-100 md:text-base md:leading-6">{{ product.name }}</span>
+      <span class="flex items-center justify-between pt-1">
+        <span class="tnum text-base font-semibold text-emerald-700 md:text-lg dark:text-emerald-400">GH₵ {{ product.price|floatformat:2 }}</span>
+        <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-700 transition-colors group-hover:bg-emerald-600 group-hover:text-white dark:bg-slate-800 dark:text-slate-300 dark:group-hover:bg-emerald-500 dark:group-hover:text-slate-950" aria-hidden="true">
+          {% icon 'add' 'text-[18px]' %}
+        </span>
+      </span>
+    </span>
+  </button>
+{% empty %}
+  <div class="col-span-2 flex flex-col items-center gap-2 py-10 text-center sm:col-span-3 xl:col-span-4">
+    {% icon 'inventory_2' 'text-[32px] text-slate-400 dark:text-slate-500' %}
+    <p class="text-sm font-semibold text-slate-900 dark:text-slate-100">No products in stock match this search</p>
+    <p class="text-xs text-slate-500 dark:text-slate-400">Clear the search box to browse the full catalog.</p>
+  </div>
+{% endfor %}

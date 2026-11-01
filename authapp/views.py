@@ -2,6 +2,8 @@ from django.shortcuts import render, redirect
 from django.contrib.auth import authenticate, get_user_model, login, logout
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.http import HttpResponse
+from django.urls import reverse
+from authapp.forms import ProfileForm
 from utils import is_admin
 
 
@@ -66,3 +68,15 @@ def signout(request):
     """Signout"""
     logout(request)
     return redirect("auth:login")
+
+
+@login_required
+def profile(request):
+    """The signed-in user's own account details."""
+    form = ProfileForm(request.POST or None, instance=request.user)
+
+    if request.method == "POST" and form.is_valid():
+        form.save()
+        return redirect(f"{reverse('auth:profile')}?saved=1")
+
+    return render(request, "authapp/profile.html", {"form": form})

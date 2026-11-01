@@ -1,17 +1,28 @@
-<div class="flex flex-col px-4 py-2 space-y-4 border-2 border-gray-800 rounded-md">
+{% load humanize %}
+{% load icons %}
+<div class="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-3 shadow-md dark:border-slate-800 dark:bg-slate-900">
   {% include "partials/alert_message.html" %}
-  <div class="flex items-center p-2 space-x-6">
-    <button @click="items=[]"
+  {% if order %}
+    <div class="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2 dark:bg-slate-950/60">
+      <span class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Receipt</span>
+      <span class="tnum text-sm font-bold text-slate-900 dark:text-slate-100">#NC-{{ order.code }}</span>
+    </div>
+  {% endif %}
+  <div class="flex flex-col gap-2">
+    <button type="button"
+            @click="clear()"
             hx-get="{% url 'core:shop-cart' %}"
             hx-target="#cart"
             hx-swap="innerHTML"
-            class="text-white bg-gradient-to-r from-gray-500 via-gray-600 to-gray-700 hover:bg-gradient-to-br focus:ring-4 focus:outline-none focus:ring-gray-300 dark:focus:ring-gray-800 shadow-lg shadow-gray-500/50 dark:shadow-lg dark:shadow-gray-800/80 font-medium rounded-lg text-sm px-5 py-2.5 text-center">
-      Go to Cart
+            class="flex min-h-[44px] w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-emerald-700 dark:bg-emerald-500 dark:text-slate-950 dark:hover:bg-emerald-600">
+      {% icon 'point_of_sale' 'text-[20px]' %}
+      <span>Start New Sale</span>
     </button>
     {% if order_number %}
       <a href="{% url 'core:print-order-pdf' order.id order_number %}"
-         class="text-white bg-gradient-to-r from-fuchsia-500 via-fuchsia-600 to-fuchsia-700 hover:bg-gradient-to-br focus:ring-4 focus:outline-none focus:ring-fuchsia-300 dark:focus:ring-fuchsia-800 shadow-lg shadow-fuchsia-500/50 dark:shadow-lg dark:shadow-fuchsia-800/80 font-medium rounded-lg text-sm px-5 py-2.5 text-center mr-2 mb-2 ">
-        Download Receipt
+         class="flex min-h-[40px] w-full items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-xs font-semibold text-slate-900 transition-colors hover:bg-slate-100 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-100 dark:hover:bg-slate-800/60">
+        {% icon 'receipt_long' 'text-[18px] text-slate-500 dark:text-slate-400' %}
+        <span>Download Receipt</span>
       </a>
     {% endif %}
   </div>

@@ -1,0 +1,223 @@
+{% extends "partials/modal.html" %}
+{% load humanize %}
+{% load icons %}
+{% block modal_width %}max-w-2xl{% endblock modal_width %}
+{% block modal_icon %}{% icon 'add_business' 'text-[24px]' %}{% endblock modal_icon %}
+{% block modal_title %}Restock Inventory Item{% endblock modal_title %}
+{% block modal_subtitle %}Log an inbound shipment for {{ product.name }}.{% endblock modal_subtitle %}
+{% block dialog_attrs %}
+  x-data="{
+    shelf: {{ product.stock }},
+    threshold: {{ product.low_stock_threshold }},
+    cost: {{ product.cost|floatformat:2 }},
+    price: {{ product.price|floatformat:2 }},
+    maxUnits: {{ max_units }},
+    units: 24,
+    num(value) {
+      const parsed = parseFloat(value);
+      return isNaN(parsed) ? 0 : parsed;
+    },
+    money(value) {
+      return this.num(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    },
+    get qty() {
+      const units = parseInt(this.units, 10);
+      return isNaN(units) || units &lt; 1 ? 0 : units;
+    },
+    get overMax() {
+      return this.qty > this.maxUnits;
+    },
+    get newTotal() {
+      return this.shelf + this.qty;
+    },
+    get batchCost() {
+      return this.qty * this.cost;
+    },
+    get batchRetail() {
+      return this.qty * this.price;
+    },
+    get margin() {
+      if (this.batchRetail &lt;= 0) return 0;
+      return ((this.batchRetail - this.batchCost) / this.batchRetail) * 100;
+    },
+    get nextStatus() {
+      if (this.newTotal &lt;= 0) return 'Out of Stock';
+      if (this.newTotal &lt;= this.threshold) return 'Low Stock';
+      return 'In Stock';
+    },
+    step(units) {
+      this.units = Math.min(this.maxUnits, Math.max(1, this.qty + units));
+    },
+  }"
+{% endblock dialog_attrs %}
+{% block modal_body %}
+  <form id="restock-form"
+        class="flex flex-col gap-4"
+        hx-post="{% url 'core:restock-product' product.id %}"
+        hx-target="#modal_root"
+        hx-swap="innerHTML">
+    <!-- Product summary -->
+    <div class="flex flex-col gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/40 sm:flex-row sm:items-center sm:justify-between">
+      <div class="flex min-w-0 items-center gap-3">
+        <div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-emerald-100 text-[13px] font-bold tracking-tight text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300">
+          {{ product.name|slugify|slice:":2"|upper }}
+        </div>
+        <div class="min-w-0">
+          <p class="truncate text-sm font-semibold text-slate-900 dark:text-slate-100">{{ product.name }}</p>
+          <p class="mt-0.5 flex flex-wrap items-center gap-x-2 text-[11px] font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">
+            <span class="tnum text-slate-700 dark:text-slate-200">{{ product.sku|default:"No code" }}</span>
+            <span aria-hidden="true">•</span>
+            <span>{{ product.get_category_display }}</span>
+          </p>
+        </div>
+      </div>
+      <span class="shrink-0 self-start rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wider sm:self-auto"
+            :class="shelf === 0 ? 'bg-rose-100 text-rose-700 dark:bg-rose-950/60 dark:text-rose-400' : (shelf &lt;= threshold ? 'bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-400' : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-400')">
+        <span class="tnum" x-text="shelf.toLocaleString()">0</span>
+        <span x-text="shelf === 1 ? 'unit on shelf' : 'units on shelf'">units on shelf</span>
+      </span>
+    </div>
+
+    <!-- Units to add -->
+    <div class="flex flex-col gap-1.5">
+      <div class="flex flex-wrap items-baseline justify-between gap-x-2">
+        <label class="text-xs font-semibold uppercase tracking-wide text-slate-700 dark:text-slate-200" for="restock_units">
+          Units to Add / Replenish <span class="text-rose-600 dark:text-rose-400">*</span>
+        </label>
+        <span class="text-[11px] text-slate-500 dark:text-slate-400" x-text="'Adds to the ' + shelf.toLocaleString() + ' units already counted'">
+          Adds to the current shelf count
+        </span>
+      </div>
+      <div class="flex flex-wrap items-center gap-3">
+        <div class="flex items-center gap-1 rounded-lg bg-slate-100 p-1 dark:bg-slate-800">
+          <button type="button"
+                  @click="step(-1)"
+                  class="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-white text-slate-600 shadow-sm transition-colors hover:bg-slate-50 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-700">
+            {% icon 'remove' 'text-[18px]' %}
+            <span class="sr-only">Decrease units</span>
+          </button>
+          <input id="restock_units"
+                 name="units"
+                 type="number"
+                 min="1"
+                 step="1"
+                 required
+                 data-autofocus
+                 x-model="units"
+                 :max="maxUnits"
+                 class="tnum w-16 border-0 bg-transparent px-1 py-1.5 text-center text-base font-semibold text-slate-900 focus:outline-none focus:ring-0 dark:text-slate-100">
+          <button type="button"
+                  @click="step(1)"
+                  class="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-white text-slate-600 shadow-sm transition-colors hover:bg-slate-50 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-700">
+            {% icon 'add' 'text-[18px]' %}
+            <span class="sr-only">Increase units</span>
+          </button>
+        </div>
+        <div class="flex items-center gap-1.5">
+          {% for preset in presets %}
+            <button type="button"
+                    @click="units = {{ preset }}"
+                    class="rounded-lg border px-2.5 py-1.5 text-xs font-semibold transition-colors"
+                    :class="qty === {{ preset }} ? 'border-emerald-500 bg-emerald-50 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300' : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700'">
+              +{{ preset }}
+            </button>
+          {% endfor %}
+        </div>
+      </div>
+      <p class="text-[11px] text-slate-500 dark:text-slate-400">
+        Whole units only, up to <span class="tnum">{{ max_units|intcomma }}</span> per shipment.
+        <span class="font-semibold text-rose-600 dark:text-rose-400" x-show="overMax">That is more than one shipment can carry.</span>
+      </p>
+    </div>
+
+    <!-- Read-only pricing -->
+    <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+      <div class="flex flex-col gap-1">
+        <label class="text-xs font-semibold uppercase tracking-wide text-slate-700 dark:text-slate-200" for="restock_cost">
+          Unit Cost Price (GH₵)
+        </label>
+        <div class="relative flex items-center">
+          <span class="pointer-events-none absolute left-4 text-sm font-medium text-slate-500 dark:text-slate-400">GH₵</span>
+          <input id="restock_cost"
+                 type="text"
+                 readonly
+                 value="{{ product.cost }}"
+                 class="tnum w-full cursor-default rounded-lg border border-slate-200 bg-slate-100 py-2 pl-14 pr-3 text-sm font-semibold text-slate-700 focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">
+        </div>
+      </div>
+      <div class="flex flex-col gap-1">
+        <label class="text-xs font-semibold uppercase tracking-wide text-slate-700 dark:text-slate-200" for="restock_price">
+          Retail Selling Price (GH₵)
+        </label>
+        <div class="relative flex items-center">
+          <span class="pointer-events-none absolute left-4 text-sm font-medium text-slate-500 dark:text-slate-400">GH₵</span>
+          <input id="restock_price"
+                 type="text"
+                 readonly
+                 value="{{ product.price }}"
+                 class="tnum w-full cursor-default rounded-lg border border-slate-200 bg-slate-100 py-2 pl-14 pr-3 text-sm font-semibold text-slate-700 focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">
+        </div>
+      </div>
+    </div>
+    <p class="-mt-2 text-[11px] text-slate-500 dark:text-slate-400">
+      Ledger rates stay fixed on inbound shipments — change pricing from the product dialog instead.
+    </p>
+
+    <!-- Calculation & ledger impact -->
+    <div class="flex flex-col gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/40">
+      <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-2 dark:border-slate-800">
+        <span class="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-slate-700 dark:text-slate-200">
+          {% icon 'insights' 'text-[18px] text-emerald-700 dark:text-emerald-400' %}
+          Calculation &amp; Ledger Impact
+        </span>
+        <span class="rounded-full px-2 py-0.5 text-[11px] font-semibold"
+              :class="nextStatus === 'In Stock' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-400' : (nextStatus === 'Low Stock' ? 'bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-400' : 'bg-rose-100 text-rose-700 dark:bg-rose-950/60 dark:text-rose-400')"
+              x-text="'Status will update to: ' + nextStatus">Status will update to: In Stock</span>
+      </div>
+      <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div class="flex flex-col">
+          <span class="text-[11px] font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">New Total Stock</span>
+          <span class="mt-0.5 text-base font-semibold text-slate-900 dark:text-slate-100">
+            <span class="tnum" x-text="newTotal.toLocaleString()">0</span>
+            <span class="text-xs font-normal text-slate-500 dark:text-slate-400">units</span>
+          </span>
+        </div>
+        <div class="flex flex-col">
+          <span class="text-[11px] font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Shipment Cost</span>
+          <span class="tnum mt-0.5 text-base font-semibold text-slate-900 dark:text-slate-100">
+            GH₵ <span x-text="money(batchCost)">0.00</span>
+          </span>
+        </div>
+        <div class="flex flex-col">
+          <span class="text-[11px] font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Retail Value</span>
+          <span class="tnum mt-0.5 text-base font-semibold text-slate-900 dark:text-slate-100">
+            GH₵ <span x-text="money(batchRetail)">0.00</span>
+          </span>
+        </div>
+        <div class="flex flex-col">
+          <span class="text-[11px] font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Gross Margin</span>
+          <span class="tnum mt-0.5 text-base font-semibold text-emerald-700 dark:text-emerald-400"
+                x-text="(margin >= 0 ? '+' : '') + margin.toFixed(1) + '%'">+0.0%</span>
+        </div>
+      </div>
+      <p class="text-[11px] text-slate-500 dark:text-slate-400">
+        Shipment cost, retail value and margin cover these <span class="tnum font-semibold" x-text="qty.toLocaleString()">0</span> incoming units only.
+      </p>
+    </div>
+  </form>
+{% endblock modal_body %}
+{% block modal_footer %}
+  <button type="button"
+          data-modal-close
+          class="rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-100">
+    Cancel
+  </button>
+  <button type="submit"
+          form="restock-form"
+          :disabled="qty &lt; 1 || overMax"
+          :class="qty &lt; 1 || overMax ? 'cursor-not-allowed bg-slate-400 text-white dark:bg-slate-700 dark:text-slate-400' : 'bg-emerald-600 hover:bg-emerald-700 dark:bg-emerald-500 dark:text-slate-950 dark:hover:bg-emerald-400'"
+          class="inline-flex items-center justify-center gap-1.5 rounded-lg px-4 py-2 text-xs font-semibold text-white transition-colors">
+    {% icon 'check_circle' 'text-[18px]' %}
+    <span x-text="overMax ? 'Too Many Units' : (qty &lt; 1 ? 'Enter Units to Restock' : ('Confirm &amp; Log ' + qty.toLocaleString() + ' Units'))">Confirm &amp; Log Restock</span>
+  </button>
+{% endblock modal_footer %}

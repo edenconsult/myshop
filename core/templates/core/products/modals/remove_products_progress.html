@@ -1,0 +1,52 @@
+{% extends "partials/modal.html" %}
+{% load icons %}
+{% block modal_width %}max-w-md{% endblock modal_width %}
+{% block modal_icon %}
+  {% if info.complete %}
+    {% if info.success %}
+      {% icon 'task_alt' 'text-[24px]' %}
+    {% else %}
+      {% icon 'error' 'text-[24px]' %}
+    {% endif %}
+  {% else %}
+    {% icon 'delete_sweep' 'text-[24px]' %}
+  {% endif %}
+{% endblock modal_icon %}
+{% block modal_title %}{% if info.complete %}{% if info.success %}Removal Complete{% else %}Removal Failed{% endif %}{% else %}Removing Products{% endif %}{% endblock modal_title %}
+{% block modal_subtitle %}Task {{ task_id|slice:":8" }}{% endblock modal_subtitle %}
+{% block overlay_attrs %}
+  {% if not info.complete %}
+    hx-get="{% url 'core:remove-products-status' task_id %}"
+    hx-trigger="load delay:100ms"
+    hx-target="this"
+    hx-swap="outerHTML"
+  {% endif %}
+{% endblock overlay_attrs %}
+{% block modal_body %}
+  <div class="flex flex-col gap-4">
+    {% include "partials/progress_bar.html" %}
+
+    {% if info.complete %}
+      {% if info.success %}
+        <p class="rounded-lg bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-400">
+          The worker finished. The ledger behind this dialog no longer lists the removed products.
+        </p>
+      {% else %}
+        <p class="break-words rounded-lg bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700 dark:bg-rose-950/40 dark:text-rose-400">
+          {{ info.result }}
+        </p>
+      {% endif %}
+    {% else %}
+      <p class="text-[11px] text-slate-500 dark:text-slate-400">
+        Closing this dialog does not stop the deletion — the worker keeps running and the table refreshes when it is done.
+      </p>
+    {% endif %}
+  </div>
+{% endblock modal_body %}
+{% block modal_footer %}
+  <button type="button"
+          data-modal-close
+          class="rounded-lg px-4 py-2 text-xs font-semibold transition-colors {% if info.complete %}bg-emerald-600 text-white hover:bg-emerald-700 dark:bg-emerald-500 dark:text-slate-950 dark:hover:bg-emerald-400{% else %}border border-slate-200 bg-white text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800{% endif %}">
+    {% if info.complete %}Back to ledger{% else %}Stop watching{% endif %}
+  </button>
+{% endblock modal_footer %}

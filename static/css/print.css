@@ -1,0 +1,30 @@
+/* Rules that only mean something on paper. Loaded by utils.render_attached_pdf
+   after Tailwind's build, so anything here overrides the compiled utilities.
+   WeasyPrint is the only consumer; browsers never fetch this file. */
+
+@page {
+  size: A4;
+  margin: 12mm 10mm;
+}
+
+/* The print templates already indent their content with mx-24, so the page box
+   itself stays flat instead of adding a second layer of horizontal space. */
+html,
+body {
+  margin: 0;
+  background: #fff;
+  color: #111;
+}
+
+/* Repeated column headers, and no row split between two pages. */
+thead {
+  display: table-header-group;
+}
+
+tfoot {
+  display: table-footer-group;
+}
+
+tr {
+  break-inside: avoid;
+}

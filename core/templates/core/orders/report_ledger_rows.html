@@ -1,0 +1,124 @@
+{% load humanize %}
+{% load icons %}
+{# Reports ledger rows + footer — swapped into #report_rows by fetchRows(). #}
+<div class="overflow-x-auto">
+  <table class="w-full border-collapse text-left text-sm">
+    <thead>
+      <tr class="bg-slate-50 text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:bg-slate-950/60 dark:text-slate-400">
+        <th scope="col" class="w-12 px-3 py-3 text-center">S/No</th>
+        <th scope="col" class="px-3 py-3">Receipt</th>
+        <th scope="col" class="px-3 py-3">Cashier</th>
+        <th scope="col" class="min-w-[220px] px-3 py-3">Items &amp; SKU</th>
+        <th scope="col" class="px-3 py-3 text-center">Qty</th>
+        <th scope="col" class="px-3 py-3 text-right">Cost Outlay</th>
+        <th scope="col" class="px-3 py-3 text-right">Selling Total</th>
+        <th scope="col" class="px-3 py-3 text-right">Realized Profit</th>
+        <th scope="col" class="w-20 px-3 py-3 text-center">Actions</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
+      {% for order in page_obj %}
+        {% with number=page_obj.start_index|add:forloop.counter0 profit=order.line_profit|default:0 cost=order.cost_outlay|default:0 %}
+          <tr class="transition-colors hover:bg-emerald-50/60 dark:hover:bg-slate-800/40">
+            <td class="tnum px-3 py-3 text-center text-xs text-slate-500 dark:text-slate-400">
+              {% if number < 10 %}0{{ number }}{% else %}{{ number }}{% endif %}
+            </td>
+            <td class="px-3 py-3">
+              <div class="tnum font-semibold text-emerald-700 dark:text-emerald-400">#{{ order.code }}</div>
+              <div class="tnum text-[11px] text-slate-500 dark:text-slate-400">
+                {{ order.created|date:"M j" }} · {{ order.created|time:"H:i" }}
+              </div>
+            </td>
+            <td class="px-3 py-3">
+              <div class="flex items-center gap-2">
+                <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-slate-100 text-[10px] font-bold text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                  {{ order.user.username|slice:":2"|upper }}
+                </span>
+                <span class="whitespace-nowrap text-slate-700 dark:text-slate-200">
+                  {{ order.user.get_full_name|default:order.user.username }}
+                </span>
+              </div>
+            </td>
+            <td class="px-3 py-3">
+              <div class="max-w-[260px]">
+                <span class="block truncate text-slate-800 dark:text-slate-100">{{ order.first_item|default:"—" }}</span>
+                <span class="tnum block text-[11px] uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                  {{ order.first_sku|default:"no SKU" }}
+                  {% if order.items_count > 1 %}
+                    <span class="text-slate-400 dark:text-slate-500">+{{ order.items_count|add:"-1" }} line{{ order.items_count|add:"-1"|pluralize }}</span>
+                  {% endif %}
+                </span>
+              </div>
+            </td>
+            <td class="tnum px-3 py-3 text-center font-semibold text-slate-900 dark:text-slate-100">
+              {{ order.units|default:0 }}
+            </td>
+            <td class="tnum px-3 py-3 text-right text-slate-600 dark:text-slate-300">
+              GH₵ {{ cost|floatformat:2|intcomma }}
+            </td>
+            <td class="tnum px-3 py-3 text-right font-semibold text-slate-900 dark:text-slate-100">
+              GH₵ {{ order.overall_amount_paid|floatformat:2|intcomma }}
+            </td>
+            <td class="tnum px-3 py-3 text-right font-semibold {% if profit < 0 %}text-rose-600 dark:text-rose-400{% else %}text-emerald-700 dark:text-emerald-400{% endif %}">
+              {% if profit < 0 %}GH₵ {{ profit|floatformat:2|intcomma }}{% else %}+GH₵ {{ profit|floatformat:2|intcomma }}{% endif %}
+            </td>
+            <td class="px-3 py-3">
+              <div class="flex items-center justify-center gap-1">
+                <a href="{% url 'core:orders' %}?view=orders&q={{ order.code }}"
+                   title="Open #{{ order.code }} in the receipts ledger"
+                   class="flex h-7 w-7 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-100">
+                  {% icon 'visibility' 'text-[17px]' %}
+                  <span class="sr-only">View receipt {{ order.code }}</span>
+                </a>
+                <a href="{% url 'core:print-order-pdf' order.id forloop.counter %}"
+                   title="Print #{{ order.code }}"
+                   class="flex h-7 w-7 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-100">
+                  {% icon 'print' 'text-[17px]' %}
+                  <span class="sr-only">Print receipt {{ order.code }}</span>
+                </a>
+              </div>
+            </td>
+          </tr>
+        {% endwith %}
+      {% empty %}
+        <tr>
+          <td colspan="9" class="px-4 py-10 text-center">
+            <p class="text-sm font-semibold text-slate-700 dark:text-slate-200">No receipts in this window</p>
+            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+              {% if q %}Nothing matches “{{ q }}”. Clear the filter or widen the date range.{% else %}Try another date or cashier.{% endif %}
+            </p>
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="flex items-center justify-between border-t border-slate-200 bg-slate-50/60 px-4 py-3 text-xs text-slate-500 dark:border-slate-800 dark:bg-slate-950/40 dark:text-slate-400">
+  <span class="tnum">
+    {% if page_obj.paginator.count %}
+      Showing rows {{ page_obj.start_index }}–{{ page_obj.end_index }} of {{ page_obj.paginator.count|intcomma }} receipt{{ page_obj.paginator.count|pluralize }}
+    {% else %}
+      No receipts
+    {% endif %}
+  </span>
+  <div class="flex items-center gap-1">
+    <button type="button"
+            @click="fetchRows({% if page_obj.has_previous %}{{ page_obj.previous_page_number }}{% else %}1{% endif %})"
+            {% if not page_obj.has_previous %}disabled{% endif %}
+            class="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-100 text-slate-700 transition-colors hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-40 dark:bg-slate-800/60 dark:text-slate-200 dark:hover:bg-slate-800">
+      {% icon 'chevron_left' 'text-[18px]' %}
+      <span class="sr-only">Previous page</span>
+    </button>
+    <span class="px-2 text-xs font-semibold text-slate-900 dark:text-slate-100">
+      Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}
+    </span>
+    <button type="button"
+            @click="fetchRows({% if page_obj.has_next %}{{ page_obj.next_page_number }}{% else %}{{ page_obj.number }}{% endif %})"
+            {% if not page_obj.has_next %}disabled{% endif %}
+            class="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-100 text-slate-700 transition-colors hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-40 dark:bg-slate-800/60 dark:text-slate-200 dark:hover:bg-slate-800">
+      {% icon 'chevron_right' 'text-[18px]' %}
+      <span class="sr-only">Next page</span>
+    </button>
+  </div>
+</div>

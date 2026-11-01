@@ -1,0 +1,222 @@
+{% extends "partials/modal.html" %}
+{% load icons %}
+{% block modal_width %}max-w-2xl{% endblock modal_width %}
+{% block modal_icon %}{% icon 'upload_file' 'text-[24px]' %}{% endblock modal_icon %}
+{% block modal_title %}Import Product Catalogue{% endblock modal_title %}
+{% block modal_subtitle %}Bulk add or refresh ledger SKUs from a spreadsheet export.{% if sku_count is not None %} {{ sku_count }} SKU{{ sku_count|pluralize }} tracked today.{% endif %}{% endblock modal_subtitle %}
+{% block dialog_attrs %}
+  @htmx:beforeRequest="busy = true"
+  x-data="{
+    file: null,
+    name: '',
+    bytes: 0,
+    rows: 0,
+    columns: [],
+    reading: false,
+    dragging: false,
+    busy: false,
+    readError: '',
+    schema: [
+      { header: 'PRODUCT', required: true },
+      { header: 'QUANTITY', required: true },
+      { header: 'COST PRICE', required: true },
+      { header: 'SELLING PRICE', required: true },
+      { header: 'SKU', required: false },
+      { header: 'CATEGORY', required: false },
+    ],
+    has(header) {
+      return this.columns.includes(header);
+    },
+    get hasFile() {
+      return this.file !== null;
+    },
+    get mapping() {
+      const found = this.columns;
+      return this.schema.map((entry) => {
+        return { header: entry.header, required: entry.required, found: found.includes(entry.header) };
+      });
+    },
+    get detected() {
+      return this.mapping.filter((entry) => entry.found).length;
+    },
+    get missingRequired() {
+      return this.mapping.filter((entry) => entry.required && !entry.found).map((entry) => entry.header);
+    },
+    get schemaOk() {
+      return this.hasFile && !this.reading && this.missingRequired.length === 0;
+    },
+    get kb() {
+      return Math.max(1, Math.round(this.bytes / 1024));
+    },
+    take(file) {
+      if (!file) return;
+      const field = this.$refs.file;
+      if (field.files[0] !== file) {
+        const store = new DataTransfer();
+        store.items.add(file);
+        field.files = store.files;
+      }
+      this.file = file;
+      this.name = file.name;
+      this.bytes = file.size;
+      this.columns = [];
+      this.rows = 0;
+      this.reading = true;
+      this.readError = '';
+      file.text().then((text) => {
+        const lines = text.split(/\r?\n/).filter((line) => line.trim() !== '');
+        this.columns = lines.length ? lines[0].split(',').map((head) => head.trim()) : [];
+        this.rows = Math.max(lines.length - 1, 0);
+        this.reading = false;
+      }).catch(() => {
+        this.reading = false;
+        this.readError = 'The browser could not read that file as text.';
+      });
+    },
+    clear() {
+      this.$refs.file.value = '';
+      this.file = null;
+      this.name = '';
+      this.bytes = 0;
+      this.rows = 0;
+      this.columns = [];
+      this.reading = false;
+      this.readError = '';
+    },
+  }"
+{% endblock dialog_attrs %}
+{% block modal_body %}
+  {% if error %}
+    <div class="mb-4 flex items-start gap-2 rounded-lg bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700 dark:bg-rose-950/40 dark:text-rose-400">
+      {% icon 'error' 'text-[18px]' %}
+      <p>{{ error }}</p>
+    </div>
+  {% endif %}
+
+  <form id="import-form"
+        class="flex flex-col gap-4"
+        data-task-commit
+        hx-post="{% url 'core:do-import-products' %}"
+        hx-encoding="multipart/form-data"
+        hx-target="#modal_root"
+        hx-swap="innerHTML">
+    <input type="file"
+           name="file"
+           accept=".csv,text/csv"
+           class="hidden"
+           x-ref="file"
+           @change="take($event.target.files[0])">
+
+    <!-- Empty dropzone -->
+    <div x-show="!hasFile"
+         x-cloak
+         @click="$refs.file.click()"
+         @dragover.prevent="dragging = true"
+         @dragleave.prevent="dragging = false"
+         @drop.prevent="dragging = false; take($event.dataTransfer.files[0])"
+         :class="dragging ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-950/40' : 'border-slate-300 hover:border-slate-400 dark:border-slate-700'"
+         class="flex cursor-pointer flex-col items-center gap-2 rounded-xl border-2 border-dashed px-4 py-9 text-center transition-colors">
+      <span class="flex h-12 w-12 items-center justify-center rounded-full bg-slate-100 dark:bg-slate-800">
+        {% icon 'cloud_upload' 'text-[24px] text-emerald-700 dark:text-emerald-400' %}
+      </span>
+      <p class="text-sm font-semibold text-slate-900 dark:text-slate-100">
+        Drag &amp; drop your inventory file here, or <span class="text-emerald-700 underline dark:text-emerald-400">browse</span>
+      </p>
+      <p class="text-[11px] text-slate-500 dark:text-slate-400">
+        UTF-8 .csv export — a PRODUCT and a QUANTITY column are required
+      </p>
+    </div>
+
+    <!-- Parsed file -->
+    <div x-show="hasFile" x-cloak class="flex flex-col gap-3">
+      <div class="flex items-start justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 dark:border-slate-700 dark:bg-slate-950/40">
+        <div class="flex min-w-0 items-center gap-3">
+          <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-white text-emerald-700 shadow-sm dark:bg-slate-900 dark:text-emerald-400">
+            {% icon 'table_chart' 'text-[20px]' %}
+          </span>
+          <div class="min-w-0">
+            <p class="truncate text-sm font-semibold text-slate-900 dark:text-slate-100" x-text="name"></p>
+            <p class="text-[11px] text-slate-500 dark:text-slate-400">
+              <span x-text="kb"></span> KB • <span x-text="rows"></span> data rows •
+              <span x-text="reading ? 'reading file…' : (missingRequired.length ? 'schema incomplete' : 'schema verified')"></span>
+            </p>
+          </div>
+        </div>
+        <div class="flex shrink-0 items-center gap-2">
+          <span x-show="schemaOk"
+                x-cloak
+                class="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-400">
+            Ready to import
+          </span>
+          <button type="button"
+                  @click="clear()"
+                  class="flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-white hover:text-rose-700 dark:hover:bg-slate-900">
+            {% icon 'delete' 'text-[18px]' %}
+            <span class="sr-only">Remove the selected file</span>
+          </button>
+        </div>
+      </div>
+
+      <p x-show="readError" x-cloak class="text-[11px] font-medium text-rose-600 dark:text-rose-400" x-text="readError"></p>
+
+      <!-- Detected columns -->
+      <div class="rounded-xl bg-slate-50 px-4 py-3 dark:bg-slate-950/40">
+        <div class="flex items-center justify-between gap-2">
+          <p class="text-xs font-semibold uppercase tracking-wide text-slate-700 dark:text-slate-200">
+            Automatic field mapping
+          </p>
+          <p class="flex items-center gap-1 text-[11px] font-medium text-slate-500 dark:text-slate-400">
+            {% icon 'task_alt' 'text-[14px]' %}
+            <span x-text="detected + ' of ' + schema.length + ' columns found'"></span>
+          </p>
+        </div>
+        <div class="mt-2 flex flex-wrap gap-1.5">
+          <template x-for="entry in mapping" :key="entry.header">
+            <span class="rounded-full px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide"
+                  :class="entry.found ? 'bg-white text-slate-700 ring-1 ring-slate-200 dark:bg-slate-900 dark:text-slate-200 dark:ring-slate-700' : 'bg-rose-100 text-rose-700 dark:bg-rose-950/60 dark:text-rose-400'"
+                  x-text="entry.header"></span>
+          </template>
+        </div>
+        <p x-show="missingRequired.length" x-cloak class="mt-2 text-[11px] font-medium text-rose-600 dark:text-rose-400">
+          Missing <span x-text="missingRequired.join(', ')"></span> — the import cannot map those fields.
+        </p>
+      </div>
+
+      <!-- Directives -->
+      <div class="rounded-xl border border-slate-200 px-4 py-3 dark:border-slate-700">
+        <p class="text-xs font-semibold uppercase tracking-wide text-slate-700 dark:text-slate-200">
+          Import directive
+        </p>
+        <label class="mt-2 flex cursor-pointer items-start gap-2">
+          <input type="checkbox"
+                 name="update_existing"
+                 value="on"
+                 class="mt-0.5 h-4 w-4 shrink-0 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 dark:border-slate-600 dark:bg-slate-800">
+          <span class="min-w-0">
+            <span class="block text-xs font-semibold text-slate-900 dark:text-slate-100">
+              Update the product when the SKU already exists
+            </span>
+            <span class="block text-[11px] text-slate-500 dark:text-slate-400">
+              Matched rows overwrite name, category, prices and shelf count. Left off, a row whose name is taken is skipped.
+            </span>
+          </span>
+        </label>
+      </div>
+    </div>
+  </form>
+{% endblock modal_body %}
+{% block modal_footer %}
+  <button type="button"
+          data-modal-close
+          class="rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-100">
+    Cancel
+  </button>
+  <button type="submit"
+          form="import-form"
+          :disabled="!schemaOk || busy"
+          :class="!schemaOk || busy ? 'cursor-not-allowed opacity-50' : 'hover:bg-emerald-700 dark:hover:bg-emerald-400'"
+          class="inline-flex items-center justify-center gap-1.5 rounded-lg bg-emerald-600 px-4 py-2 text-xs font-semibold text-white transition-colors dark:bg-emerald-500 dark:text-slate-950">
+    {% icon 'publish' 'text-[18px]' %}
+    <span x-text="busy ? 'Importing…' : (rows > 0 ? 'Import ' + rows + (rows === 1 ? ' Product' : ' Products') : 'Import Products')">Import Products</span>
+  </button>
+{% endblock modal_footer %}

@@ -1,40 +1,158 @@
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.db import transaction
 from django.shortcuts import get_object_or_404, render
-from django.db.models import F, Sum, ExpressionWrapper, DecimalField, Prefetch
+from django.db.models import (
+    Case,
+    Count,
+    ExpressionWrapper,
+    F,
+    OuterRef,
+    Prefetch,
+    Subquery,
+    Sum,
+    When,
+    DecimalField,
+)
+from django.http import HttpResponse
 from decimal import Decimal
 
 from authapp.models import Account
-from .models import Product, Order, OrderItem
+from .models import Product, ProductCategory, Order, OrderItem
 from utils import generate_code, is_admin, render_attached_pdf
 import io
-from .tasks import import_products_task, remove_products_task
+from .tasks import (
+    PROFIT_RATE_MAX,
+    import_products_task,
+    remove_products_task,
+)
 from celery.result import AsyncResult
 from celery_progress.backend import Progress
 import csv
 from django.core.paginator import Paginator
-from django.db.models import Q, Sum, F
+from django.db.models import Q
 from .forms import ProductCreationForm
 import json
 import datetime as dt
 from django.utils import timezone
 from django.db.models import QuerySet
 from django_htmx.http import trigger_client_event
-from django.views.decorators.http import require_POST
+from django.views.decorators.http import require_GET, require_POST
+
+# the register grid is 2/3/4 columns wide, so a page fills every column
+POS_PAGE_SIZE = 12
+
+LEDGER_PAGE_SIZE = 10
+
+# how many names the bulk-removal dialog lists before falling back to a count
+REMOVAL_SAMPLE_SIZE = 6
+
+MONEY_FIELD = DecimalField(max_digits=12, decimal_places=2)
+
+# the ledger's Margin column is gross margin on revenue: (retail - cost) /
+# retail, the same figure the add and restock dialogs show. price = 0 is
+# quarantined in the CASE so a free sample cannot divide by zero. The alias
+# cannot be "margin" -- that name is taken by Product.margin, which has no
+# setter -- because sorting needs a column the database can order on.
+LEDGER_MARGIN_SQL = ExpressionWrapper(
+    Case(
+        When(
+            price__gt=0,
+            then=(F("price") - F("cost")) / F("price") * 100,
+        ),
+        default=Decimal("0.00"),
+        output_field=MONEY_FIELD,
+    ),
+    output_field=MONEY_FIELD,
+)
+
+LEDGER_SORTS = {
+    "updated": ["-updated"],
+    "stock_asc": ["stock", "-updated"],
+    "stock_desc": ["-stock", "-updated"],
+    "price_desc": ["-price"],
+    "margin_desc": ["-ledger_margin"],
+}
+
+LEDGER_STATUSES = {"all", "in_stock", "low", "out_of_stock", "alert"}
 
 
 @login_required
 @user_passes_test(is_admin)
 def index(request):
-    return render(request, "core/index.html")
+    today = timezone.localdate()
+    yesterday = today - dt.timedelta(days=1)
+
+    todays_orders = Order.objects.filter(created__date=today)
+    today_sales = todays_orders.aggregate(total=Sum("overall_amount_paid"))["total"] or Decimal("0.00")
+    yesterday_sales = (
+        Order.objects.filter(created__date=yesterday).aggregate(
+            total=Sum("overall_amount_paid")
+        )["total"]
+        or Decimal("0.00")
+    )
+
+    if yesterday_sales > 0:
+        sales_change = round(
+            float((today_sales - yesterday_sales) / yesterday_sales * 100)
+        )
+    else:
+        sales_change = None
+
+    out_of_stock_products = Product.objects.filter(stock=0).order_by("name")
+    out_of_stock_count = out_of_stock_products.count()
+
+    recent_orders = (
+        Order.objects.select_related("user")
+        .prefetch_related(
+            Prefetch(
+                "orderitem_set",
+                queryset=OrderItem.objects.select_related("product"),
+            )
+        )
+        .order_by("-created")[:4]
+    )
+
+    cashier_rows = (
+        todays_orders.values("user__first_name", "user__last_name", "user__username")
+        .annotate(total=Sum("overall_amount_paid"))
+        .order_by("-total")[:3]
+    )
+    cashier_sales = []
+    for row in cashier_rows:
+        name = f"{row['user__first_name']} {row['user__last_name']}".strip()
+        cashier_sales.append(
+            {
+                "name": name or row["user__username"],
+                "total": row["total"] or Decimal("0.00"),
+            }
+        )
+
+    context = {
+        "today_sales": today_sales,
+        "sales_change": sales_change,
+        "sales_change_positive": sales_change is not None and sales_change >= 0,
+        "orders_today": todays_orders.count(),
+        "products_listed": Product.objects.count(),
+        "out_of_stock_count": out_of_stock_count,
+        "restock_products": list(
+            out_of_stock_products.values_list("name", flat=True)[:3]
+        ),
+        "recent_orders": recent_orders,
+        "cashier_sales": cashier_sales,
+    }
+    return render(request, "core/index.html", context)
 
 
 @login_required
 @user_passes_test(is_admin)
 def products_home(request):
-    products = Product.objects.all()
+    initial_view = request.GET.get("view", "")
+    if initial_view not in {"add", "import", "out-of-stock"}:
+        initial_view = ""
+
     context = {
-        "products": products,
+        "initial_view": initial_view,
+        "initial_status": "alert" if initial_view == "out-of-stock" else "all",
     }
     return render(request, "core/products/products.html", context)
 
@@ -42,43 +160,55 @@ def products_home(request):
 @login_required
 @user_passes_test(is_admin)
 def load_products(request):
-    limit = request.GET.get("l")
-    page = request.GET.get("p")
-    search_term = request.GET.get("s") if request.GET.get("s") is not None else ""
+    limit = int(request.GET.get("l") or LEDGER_PAGE_SIZE)
+    page = request.GET.get("p") or 1
+    search_term = request.GET.get("s") or ""
+    category = request.GET.get("c") or ""
+    status = request.GET.get("status") or "all"
+    sort = request.GET.get("sort") or "updated"
 
-    if limit is not None:
-        limit = int(limit)
+    products = Product.objects.annotate(ledger_margin=LEDGER_MARGIN_SQL)
 
-    products = Product.objects.all().order_by("-created")
     if search_term != "":
-        products = products.filter(Q(name__icontains=search_term)).order_by("-created")
+        products = products.filter(
+            Q(name__icontains=search_term) | Q(sku__icontains=search_term)
+        )
+    if category in ProductCategory.values:
+        products = products.filter(category=category)
 
-    paginator = Paginator(object_list=products, per_page=limit)
+    if status == "in_stock":
+        products = products.filter(stock__gt=F("low_stock_threshold"))
+    elif status == "low":
+        products = products.filter(stock__gt=0, stock__lte=F("low_stock_threshold"))
+    elif status == "out_of_stock":
+        products = products.filter(stock=0)
+    elif status == "alert":
+        products = products.filter(stock__lte=F("low_stock_threshold"))
 
-    if page is None:
-        page = 1
+    products = products.order_by(*(LEDGER_SORTS.get(sort) or LEDGER_SORTS["updated"]))
 
-    page_obj = paginator.get_page(page)
+    page_obj = Paginator(object_list=products, per_page=limit).get_page(page)
+    total = products.count()
 
-    starting_number = 1
-    stopping_number = limit
-
-    if page_obj.has_previous():
-        starting_number = page_obj.previous_page_number() * limit
-        stopping_number = starting_number + limit
+    starting_number = (page_obj.number - 1) * limit + 1
+    stopping_number = min(page_obj.number * limit, total)
 
     pages = [
-        {"number": page, "allow": type(page) == int}
-        for page in list(page_obj.paginator.get_elided_page_range())  # type: ignore
+        {"number": number, "allow": type(number) is int}
+        for number in list(page_obj.paginator.get_elided_page_range())  # type: ignore
     ]
 
     context = {
         "page_obj": page_obj,
-        "number_of_products": products.count(),
+        "number_of_products": total,
         "starting_number": starting_number,
         "stopping_number": stopping_number,
         "limit": limit,
         "search_term": search_term,
+        "category": category,
+        "categories": ProductCategory.choices,
+        "status": status if status in LEDGER_STATUSES else "all",
+        "sort": sort if sort in LEDGER_SORTS else "updated",
         "pages": pages,
     }
     return render(request, "core/partials/table_search.html", context)
@@ -92,14 +222,17 @@ def update_product_stock(request, product_id):
     stock = request.POST.get("stock")
 
     try:
-        product.stock = int(stock)
+        stock = int(stock)
     except (TypeError, ValueError):
-        context = {
-            "type": "danger",
-            "message": "Stock must be a whole number.",
-        }
-        return render(request, "core/products/response.html", context)
+        stock = -1
 
+    if stock < 0:
+        # nothing to write back, so hand the row straight back unchanged
+        return render(
+            request, "core/partials/product_table_row.html", {"product": product}
+        )
+
+    product.stock = stock
     product.save()
     context = {"product": product}
     return render(request, "core/partials/product_table_row.html", context)
@@ -108,40 +241,57 @@ def update_product_stock(request, product_id):
 @login_required
 @user_passes_test(is_admin)
 def import_products(request):
-    context = {}
-    return render(
-        request,
-        "core/products/import_products.html",
-        context,
-    )
+    context = {"sku_count": Product.objects.count()}
+    return render(request, "core/products/modals/import_products.html", context)
 
 
 @require_POST
 @login_required
 @user_passes_test(is_admin)
 def do_import_products(request):
-    if bool(request.FILES.get("file")):
-        file = io.TextIOWrapper(request.FILES.get("file"))
-        csv_reader = csv.DictReader(file)
-        rows = [row for row in csv_reader if row.get("PRODUCT") != ""]
-
-        import_task = import_products_task.delay(rows)  # type: ignore
-        task_id = import_task.task_id
-        progress = Progress(AsyncResult(task_id))
-        info = progress.get_info()
-        context = {
-            "task_id": task_id,
-            "info": info,
-        }
-        return render(request, "core/products/import_products_progress.html", context)
-    else:
-        context = {"error": "No file submitted"}
-
+    upload = request.FILES.get("file")
+    if not upload:
         return render(
             request,
-            "core/products/import_products.html",
-            context,
+            "core/products/modals/import_products.html",
+            {"error": "Choose a .csv file to import."},
         )
+
+    update_existing = request.POST.get("update_existing") == "on"
+
+    try:
+        # utf-8-sig: the dialog promises UTF-8 and Excel exports stamp a BOM
+        csv_reader = csv.DictReader(io.TextIOWrapper(upload, encoding="utf-8-sig"))
+        rows = [row for row in csv_reader if row.get("PRODUCT")]
+    except (UnicodeDecodeError, csv.Error):
+        return render(
+            request,
+            "core/products/modals/import_products.html",
+            {"error": "That file could not be read as a UTF-8 CSV."},
+        )
+
+    if not rows:
+        return render(
+            request,
+            "core/products/modals/import_products.html",
+            {"error": "No product rows found. A PRODUCT column is required."},
+        )
+
+    import_task = import_products_task.delay(rows, update_existing)  # type: ignore
+    task_id = import_task.task_id
+    progress = Progress(AsyncResult(task_id))
+    info = progress.get_info()
+    context = {
+        "task_id": task_id,
+        "info": info,
+    }
+    response = render(request, "core/products/import_products_progress.html", context)
+    # a small import can finish before this first render; then the template
+    # ships no polling loop, so this response itself has to refresh the ledger
+    if not info["complete"]:
+        return response
+
+    return trigger_client_event(response, "reload_products_table")
 
 
 @login_required
@@ -163,13 +313,6 @@ def track_import_progress(request, task_id):
 
 @login_required
 @user_passes_test(is_admin)
-def remove_all_products(request):
-    context = {}
-    return render(request, "core/products/remove_products_question.html", context)
-
-
-@login_required
-@user_passes_test(is_admin)
 def track_remove_product_progress(request, task_id):
     progress = Progress(AsyncResult(task_id))
     info = progress.get_info()
@@ -178,7 +321,7 @@ def track_remove_product_progress(request, task_id):
         "task_id": task_id,
         "info": info,
     }
-    response = render(request, "core/products/remove_products_progress.html", context)
+    response = render(request, "core/products/modals/remove_products_progress.html", context)
     if not info["complete"]:
         return response
 
@@ -187,26 +330,39 @@ def track_remove_product_progress(request, task_id):
 
 @login_required
 @user_passes_test(is_admin)
-def get_product_action_buttons(request):
-    return render(request, "core/partials/product_action_buttons.html")
-
-
-@login_required
-@user_passes_test(is_admin)
+@require_POST
 def remove_all_products_question(request):
-    context = {"ids": []}
-    if request.method == "POST":
-        context["ids"] = request.POST.getlist("ids")
-    return render(request, "core/products/remove_all_products_question.html", context)
+    """Confirm the bulk delete before handing it to the worker."""
+    ids = request.POST.getlist("ids")
+    products = Product.objects.filter(pk__in=ids)
+    totals = products.aggregate(units=Sum("stock"))
+    sample_names = list(
+        products.order_by("name").values_list("name", flat=True)[:REMOVAL_SAMPLE_SIZE]
+    )
+
+    context = {
+        "ids": ids,
+        "count": products.count(),
+        "units": totals["units"] or 0,
+        "order_lines": OrderItem.objects.filter(product__in=ids).count(),
+        "sample_names": sample_names,
+        "remaining": max(products.count() - len(sample_names), 0),
+    }
+    return render(request, "core/products/modals/remove_selected.html", context)
 
 
 @login_required
 @user_passes_test(is_admin)
+@require_POST
 def do_remove_products(request):
-    ids = []
-    if request.method == "POST":
-        if request.POST.getlist("ids") is not None:
-            ids = request.POST.getlist("ids")
+    ids = request.POST.getlist("ids")
+    if not ids:
+        context = {
+            "type": "danger",
+            "message": "No products were selected, so nothing was queued. "
+            "Tick the rows to remove and try again.",
+        }
+        return render(request, "core/products/response.html", context)
 
     remove_task = remove_products_task.delay(ids)  # type: ignore
     task_id = remove_task.task_id
@@ -216,104 +372,135 @@ def do_remove_products(request):
     context = {
         "task_id": task_id,
         "info": info,
-        "selected_removal": len(ids) > 0,
-        "count": len(ids) if len(ids) > 0 else Product.objects.count(),
     }
-    return render(request, "core/products/remove_products_progress.html", context)
+    response = render(
+        request, "core/products/modals/remove_products_progress.html", context
+    )
+    # as with the import: a small removal can finish before this first render,
+    # leaving no polling loop that would ever broadcast the ledger refresh
+    if not info["complete"]:
+        return response
+
+    return trigger_client_event(response, "reload_products_table")
 
 
 @login_required
 @user_passes_test(is_admin)
-def add_product(request):
-    form_title = "Enter new product details below"
-    form = ProductCreationForm()
-    if request.method == "POST":
-        form = ProductCreationForm(request.POST)
+def add_product(request, product_id=None):
+    """Create or edit one product; the same dialog serves both."""
+    product = get_object_or_404(Product, pk=product_id) if product_id else None
+    form = ProductCreationForm(
+        request.POST if request.method == "POST" else None,
+        request.FILES if request.method == "POST" else None,
+        instance=product,
+    )
 
-        if form.is_valid():
-            try:
-                product = form.save(commit=False)
+    if request.method == "POST" and form.is_valid():
+        try:
+            saved = form.save(commit=False)
+            cost = form.cleaned_data["cost"]
+            price = form.cleaned_data["price"]
+            # profit_rate is the legacy decimal(3,2) column, so an unpriced or
+            # loss-making product would overflow it; the ledger renders
+            # Product.margin instead
+            saved.profit_rate = (
+                min(cost / price, PROFIT_RATE_MAX) if price > 0 else Decimal("0.00")
+            )
+            saved.save()
+        except Exception as e:
+            print(e)
+            label = product.name if product else "New product"
+            context = {
+                "type": "danger",
+                "message": f"{label} could not be saved. Try again later.",
+            }
+            return render(request, "core/products/response.html", context)
+        else:
+            verb = "updated in" if product else "added to"
+            context = {
+                "type": "success",
+                "message": f"{saved.name} was {verb} the stock ledger.",
+            }
+            response = render(request, "core/products/response.html", context)
+            return trigger_client_event(response, "reload_products_table")
 
-                if int(form.cleaned_data["cost"]) > 0:
-                    product.profit_rate = abs(int(form.cleaned_data["cost"])) / abs(
-                        int(form.cleaned_data["price"])
-                    )
-                else:
-                    product.profit_rate = 0
-                product.save()
-            except Exception as e:
-                print(e)
-                context = {
-                    "type": "danger",
-                    "message": "New product could not be saved. Try again later.",
-                }
-                return render(request, "core/products/response.html", context)
-            else:
-                context = {
-                    "type": "success",
-                    "message": "New product successfully saved.",
-                }
-                response = render(request, "core/products/response.html", context)
-                return trigger_client_event(response, "reload_products_table")
+    context = {
+        "form": form,
+        "product": product,
+        "is_update": product is not None,
+    }
+    return render(request, "core/products/modals/product_form.html", context)
 
-    context = {"form": form, "form_title": form_title}
-    return render(request, "core/products/new_product.html", context)
+
+MAX_RESTOCK_UNITS = 100_000  # keeps stock inside the int4 column
+RESTOCK_PRESETS = (12, 24, 48, 100)
 
 
 @login_required
 @user_passes_test(is_admin)
-def update_product(request, product_id):
-    form_title = "Update product details below"
-    product = Product.objects.get(pk=product_id)
-    form = ProductCreationForm(instance=product)
-    if request.method == "POST":
-        form = ProductCreationForm(request.POST, instance=product)
-        if form.is_valid():
-            try:
-                product = form.save(commit=False)
-                if int(form.cleaned_data["cost"]) > 0:
-                    product.profit_rate = abs(int(form.cleaned_data["cost"])) / abs(
-                        int(form.cleaned_data["price"])
-                    )
-                else:
-                    product.profit_rate = 0
-                product.save()
-            except Exception as e:
-                print(e)
-                context = {
-                    "type": "danger",
-                    "message": "The product's update could not be saved. Try again later.",  # noqa: E501
-                }
-                return render(request, "core/products/response.html", context)
-            else:
-                context = {
-                    "type": "success",
-                    "message": "Product successfully updated.",
-                }
-                response = render(request, "core/products/response.html", context)
-                return trigger_client_event(response, "reload_products_table")
+def restock_product(request, product_id):
+    """Log an inbound shipment by adding units to the current shelf count."""
+    product = get_object_or_404(Product, pk=product_id)
 
-    context = {"form": form, "form_title": form_title, "product": product}
-    return render(request, "core/products/new_product.html", context)
+    if request.method == "POST":
+        try:
+            units = int(request.POST.get("units"))
+        except (TypeError, ValueError):
+            units = 0
+
+        if not 0 < units <= MAX_RESTOCK_UNITS:
+            context = {
+                "type": "danger",
+                "message": "Enter a whole number of units between 1 and "
+                f"{MAX_RESTOCK_UNITS:,}.",
+            }
+            return render(request, "core/products/response.html", context)
+
+        Product.objects.filter(pk=product.pk).update(stock=F("stock") + units)
+        product.refresh_from_db(fields=["stock"])
+
+        context = {
+            "type": "success",
+            "message": f"{units:,} units of {product.name} logged. "
+            f"Shelf count is now {product.stock:,}.",
+        }
+        response = render(request, "core/products/response.html", context)
+        return trigger_client_event(response, "reload_products_table")
+
+    context = {
+        "product": product,
+        "presets": RESTOCK_PRESETS,
+        "max_units": MAX_RESTOCK_UNITS,
+    }
+    return render(request, "core/products/modals/restock_product.html", context)
 
 
 @login_required
 @user_passes_test(is_admin)
 def remove_a_product_question(request, product_id):
-    product = Product.objects.get(pk=product_id)
-    context = {"product": product}
-    return render(request, "core/products/remove_a_product_question.html", context)
+    product = get_object_or_404(Product, pk=product_id)
+    context = {
+        "product": product,
+        "order_lines": product.orderitem_set.count(),
+    }
+    return render(request, "core/products/modals/remove_product.html", context)
 
 
 @login_required
 @user_passes_test(is_admin)
+@require_POST
 def do_remove_a_product(request, product_id):
-    product = Product.objects.get(pk=product_id)
+    product = get_object_or_404(Product, pk=product_id)
+    name = product.name
+    order_lines = product.orderitem_set.count()
     product.delete()
+    if order_lines:
+        detail = f" {order_lines} order line{'s' if order_lines > 1 else ''} went with it."
+    else:
+        detail = " Sales history was untouched."
     context = {
         "type": "success",
-        "message": f"Product '{product}' successfully removed.",
-        "product": product,
+        "message": f"{name} was removed from the ledger." + detail,
     }
     response = render(request, "core/products/response.html", context)
     return trigger_client_event(response, "reload_products_table")
@@ -322,30 +509,394 @@ def do_remove_a_product(request, product_id):
 @login_required
 @user_passes_test(is_admin)
 def orders(request):
-    context = {}
+    initial_view = request.GET.get("view", "reports")
+    if initial_view not in {"pos", "orders", "reports"}:
+        initial_view = "reports"
+
+    context = {"initial_view": initial_view}
+    if initial_view == "orders":
+        context["kpi"] = ledger_today_kpis()
+        context["cashiers"] = Account.objects.order_by("username")
+    elif initial_view == "reports":
+        # the reports tab owns its whole viewport, so it renders ready-filled
+        context.update(report_screen_context(request.GET))
     return render(request, "core/orders/orders.html", context)
+
+
+def ledger_today_kpis():
+    """Today's headline metrics for the ledger KPI cards."""
+    today = timezone.localdate()
+    today_orders = Order.objects.filter(created__date=today)
+    totals = today_orders.aggregate(
+        count=Count("id"),
+        revenue=Sum("overall_amount_paid"),
+        cashier_count=Count("user", distinct=True),
+    )
+    count = totals["count"]
+    revenue = totals["revenue"] or Decimal("0.00")
+
+    today_items = OrderItem.objects.filter(order__in=today_orders)
+    profit = today_items.aggregate(
+        total=Sum(
+            ExpressionWrapper(
+                F("qty_bought") * (F("product__price") - F("product__cost")),
+                output_field=MONEY_FIELD,
+            )
+        )
+    )["total"]
+    profit = profit or Decimal("0.00")
+    units = today_items.aggregate(units=Sum("qty_bought"))["units"] or 0
+
+    yesterday_revenue = (
+        Order.objects.filter(created__date=today - dt.timedelta(days=1)).aggregate(
+            r=Sum("overall_amount_paid")
+        )["r"]
+        or Decimal("0.00")
+    )
+    revenue_delta_pct = None
+    if yesterday_revenue:
+        revenue_delta_pct = (
+            (revenue - yesterday_revenue) / yesterday_revenue * 100
+        ).quantize(Decimal("0.1"))
+
+    return {
+        "date": today,
+        "order_count": count,
+        "revenue": revenue,
+        "cashier_count": totals["cashier_count"],
+        "yesterday_revenue": yesterday_revenue,
+        "revenue_delta_pct": revenue_delta_pct,
+        "aov": (revenue / count).quantize(Decimal("0.01")) if count else None,
+        "avg_items": (Decimal(units) / count).quantize(Decimal("0.1"))
+        if count
+        else None,
+        "profit": profit,
+        "margin_pct": (profit / revenue * 100).quantize(Decimal("0.1"))
+        if revenue
+        else None,
+    }
+
+
+def ledger_filtered_orders(params):
+    """Ledger queryset shared by the table partial and the CSV export."""
+    orders_qs = Order.objects.select_related("user").annotate(
+        items_count=Count("orderitem"),
+        first_item=Subquery(
+            OrderItem.objects.filter(order=OuterRef("pk"))
+            .order_by("product__name")
+            .values("product__name")[:1]
+        ),
+    )
+
+    q = (params.get("q") or "").strip()
+    if q:
+        orders_qs = orders_qs.filter(code__icontains=q)
+
+    users = (params.get("users") or "all").strip()
+    if users and users != "all":
+        orders_qs = orders_qs.filter(user__username=users)
+
+    date_str = (params.get("date") or "").strip()
+    if date_str:
+        try:
+            day = dt.datetime.strptime(date_str, "%Y-%m-%d").date()
+        except ValueError:
+            day = None
+        if day is not None:
+            orders_qs = orders_qs.filter(created__date=day)
+
+    return orders_qs.order_by("-created")
+
+
+# --- Sales reports -----------------------------------------------------------
+#
+# The reports page is driven by one inclusive [start, end] window over local
+# dates, shared by the screen, the CSV export and the PDF so all three always
+# agree on what "the report" is.
+
+REPORT_PRESETS = ("today", "yesterday", "7d", "mtd", "custom")
+
+
+def _report_date(value):
+    """An ISO date out of the query string, or None when it is blank/nonsense."""
+    try:
+        return dt.date.fromisoformat(str(value or "").strip())
+    except ValueError:
+        return None
+
+
+def _pct(part, whole):
+    """part as a percentage of whole, or None when there is nothing to divide.
+
+    Units aggregate to an int and money to a Decimal, so each side goes through
+    str() before Decimal(): int / int would land on a float, which has no
+    .quantize(), and float maths would quietly round the percentage.
+    """
+    if not whole:
+        return None
+    return (Decimal(str(part)) / Decimal(str(whole)) * 100).quantize(Decimal("0.1"))
+
+
+def report_range(params):
+    """The filter bar's query string as concrete dates.
+
+    Anything unrecognised falls back to today rather than raising, and the
+    previous window of the same length travels along with the range so the KPI
+    deltas always compare like with like.
+    """
+    today = timezone.localdate()
+    preset = (params.get("preset") or "today").strip()
+    start = end = today
+
+    if preset == "yesterday":
+        start = end = today - dt.timedelta(days=1)
+    elif preset == "7d":
+        start = today - dt.timedelta(days=6)
+    elif preset == "mtd":
+        start = today.replace(day=1)
+    elif preset == "custom":
+        custom_start = _report_date(params.get("start"))
+        custom_end = _report_date(params.get("end"))
+        if custom_start and custom_end:
+            start, end = min(custom_start, custom_end), max(custom_start, custom_end)
+        else:
+            preset = "today"
+    else:
+        preset = "today"
+
+    length = end - start
+    cashier = (params.get("users") or "").strip()
+
+    return {
+        "preset": preset,
+        "start": start,
+        "end": end,
+        "days": (length.days + 1),
+        "previous_start": start - length - dt.timedelta(days=1),
+        "previous_end": start - dt.timedelta(days=1),
+        "cashier": "" if cashier == "all" else cashier,
+    }
+
+
+def report_orders(rng, start_key="start", end_key="end"):
+    """Receipts inside one window of the range, narrowed to a cashier."""
+    orders = Order.objects.filter(
+        created__date__gte=rng[start_key], created__date__lte=rng[end_key]
+    )
+    if rng["cashier"]:
+        orders = orders.filter(user__username=rng["cashier"])
+    return orders
+
+
+def report_metrics(orders):
+    """Units, money and margin for one set of receipts.
+
+    Revenue is what the receipts actually charged; cost and profit are priced
+    from the *current* catalogue, because OrderItem keeps no cost snapshot —
+    the same convention the legacy reports used.
+    """
+    totals = orders.aggregate(
+        order_count=Count("id"),
+        revenue=Sum("overall_amount_paid"),
+    )
+    lines = OrderItem.objects.filter(order__in=orders).aggregate(
+        units=Sum("qty_bought"),
+        cost=Sum(
+            ExpressionWrapper(
+                F("qty_bought") * F("product__cost"), output_field=MONEY_FIELD
+            )
+        ),
+        profit=Sum(
+            ExpressionWrapper(
+                F("qty_bought") * (F("product__price") - F("product__cost")),
+                output_field=MONEY_FIELD,
+            )
+        ),
+    )
+
+    revenue = totals["revenue"] or Decimal("0.00")
+    cost = lines["cost"] or Decimal("0.00")
+    profit = lines["profit"] or Decimal("0.00")
+    count = totals["order_count"]
+
+    return {
+        "order_count": count,
+        "units": lines["units"] or 0,
+        "revenue": revenue.quantize(Decimal("0.01")),
+        "cost": cost.quantize(Decimal("0.01")),
+        "profit": profit.quantize(Decimal("0.01")),
+        "margin_pct": _pct(profit, revenue),
+        "cost_share_pct": _pct(cost, revenue),
+        "profit_multiplier": (profit / cost).quantize(Decimal("0.01"))
+        if cost
+        else None,
+        "aov": (revenue / count).quantize(Decimal("0.01")) if count else None,
+    }
+
+
+def report_context(rng):
+    """Everything the reports screen shows for one range."""
+    orders = report_orders(rng)
+    kpi = report_metrics(orders)
+
+    previous = report_metrics(report_orders(rng, "previous_start", "previous_end"))
+    kpi["previous_revenue"] = previous["revenue"]
+    kpi["revenue_delta_pct"] = _pct(
+        kpi["revenue"] - previous["revenue"], previous["revenue"]
+    )
+    kpi["units_delta_pct"] = _pct(kpi["units"] - previous["units"], previous["units"])
+    kpi["profit_delta_pct"] = _pct(kpi["profit"] - previous["profit"], previous["profit"])
+
+    revenue = kpi["revenue"]
+    category_labels = dict(ProductCategory.choices)
+
+    by_cashier = [
+        {
+            "username": row["user__username"],
+            "name": f"{row['user__first_name']} {row['user__last_name']}".strip()
+            or row["user__username"],
+            "orders": row["receipts"],
+            "revenue": (row["revenue"] or Decimal("0.00")).quantize(Decimal("0.01")),
+            "share_pct": _pct(row["revenue"], revenue),
+        }
+        for row in orders.values(
+            "user__username", "user__first_name", "user__last_name"
+        ).annotate(receipts=Count("id"), revenue=Sum("overall_amount_paid"))
+    ]
+    by_cashier.sort(key=lambda row: row["revenue"], reverse=True)
+
+    by_category = [
+        {
+            "key": row["product__category"],
+            "label": category_labels.get(
+                row["product__category"], row["product__category"]
+            ),
+            "units": row["units"],
+            "revenue": (row["revenue"] or Decimal("0.00")).quantize(Decimal("0.01")),
+            "share_pct": _pct(row["revenue"], revenue),
+        }
+        for row in OrderItem.objects.filter(order__in=orders)
+        .values("product__category")
+        .annotate(units=Sum("qty_bought"), revenue=Sum("paid_amount"))
+    ]
+    by_category.sort(key=lambda row: row["revenue"], reverse=True)
+
+    top_row = (
+        OrderItem.objects.filter(order__in=orders)
+        .values("product__name", "product__sku")
+        .annotate(units=Sum("qty_bought"), revenue=Sum("paid_amount"))
+        .order_by("-units", "product__name")
+        .first()
+    )
+    top_sku = None
+    if top_row:
+        top_sku = {
+            "name": top_row["product__name"],
+            "sku": top_row["product__sku"],
+            "units": top_row["units"],
+            "revenue": top_row["revenue"].quantize(Decimal("0.01")),
+        }
+
+    return {
+        "range": rng,
+        "kpi": kpi,
+        "by_cashier": by_cashier,
+        "by_category": by_category,
+        "categories_active": len(by_category),
+        "top_sku": top_sku,
+    }
+
+
+@login_required
+@user_passes_test(is_admin)
+def orders_ledger(request):
+    try:
+        page = int(request.GET.get("p") or 1)
+    except ValueError:
+        page = 1
+
+    orders_qs = ledger_filtered_orders(request.GET)
+    paginator = Paginator(orders_qs, LEDGER_PAGE_SIZE)
+    page_obj = paginator.get_page(page)
+
+    context = {
+        "page_obj": page_obj,
+        "q": (request.GET.get("q") or "").strip(),
+        "users": (request.GET.get("users") or "all").strip() or "all",
+        "date": (request.GET.get("date") or "").strip(),
+    }
+    return render(request, "core/orders/ledger_table.html", context)
+
+
+@require_GET
+@login_required
+@user_passes_test(is_admin)
+def export_orders_csv(request):
+    orders_qs = ledger_filtered_orders(request.GET)
+
+    stamp = timezone.localtime().strftime("%Y%m%d_%H%M%S")
+    response = HttpResponse(content_type="text/csv")
+    response["Content-Disposition"] = f'attachment; filename="orders_{stamp}.csv"'
+
+    writer = csv.writer(response)
+    writer.writerow(["Receipt", "Date", "Time", "Cashier", "Items", "Total (GHs)"])
+    for order in orders_qs.iterator():
+        local_created = timezone.localtime(order.created)
+        writer.writerow(
+            [
+                order.code,
+                f"{local_created:%Y-%m-%d}",
+                f"{local_created:%H:%M:%S}",
+                order.user.username,
+                order.items_count,
+                order.overall_amount_paid,
+            ]
+        )
+    return response
 
 
 @login_required
 @user_passes_test(is_admin)
 def products_summary(request):
-    money_field = DecimalField(max_digits=12, decimal_places=2)
     totals = Product.objects.aggregate(
         sum_stock=Sum("stock"),
-        sum_cost=Sum(F("cost") * F("stock"), output_field=money_field),
-        sum_sales=Sum(F("price") * F("stock"), output_field=money_field),
+        sum_cost=Sum(F("cost") * F("stock"), output_field=MONEY_FIELD),
+        sum_sales=Sum(F("price") * F("stock"), output_field=MONEY_FIELD),
+        total=Count("id"),
+        depleted=Count("id", filter=Q(stock=0)),
+        low=Count("id", filter=Q(stock__gt=0, stock__lte=F("low_stock_threshold"))),
+        categories=Count("category", distinct=True),
     )
 
-    if totals["sum_sales"] is not None and totals["sum_cost"] is not None:
-        profit = round(float(totals["sum_sales"]) - float(totals["sum_cost"]), 2)
-    else:
-        profit = 0
+    cost_value = totals["sum_cost"] or Decimal("0.00")
+    retail_value = totals["sum_sales"] or Decimal("0.00")
+    valuation_margin = (
+        (retail_value - cost_value) / retail_value * 100
+        if retail_value > 0
+        else Decimal("0.00")
+    )
+
+    depleted_names = (
+        list(
+            Product.objects.filter(stock=0)
+            .order_by("name")
+            .values_list("name", flat=True)[:3]
+        )
+        if totals["depleted"]
+        else []
+    )
 
     context = {
-        "stock_sum": totals["sum_stock"] if totals["sum_stock"] is not None else 0,
-        "cash_invested": totals["sum_cost"] if totals["sum_cost"] is not None else 0,
-        "after_orders": totals["sum_sales"] if totals["sum_sales"] is not None else 0,
-        "profit": profit,
+        "total_skus": totals["total"],
+        "categories_count": totals["categories"],
+        "units_in_stock": totals["sum_stock"] or 0,
+        "cost_value": cost_value,
+        "retail_value": retail_value,
+        "valuation_margin": valuation_margin,
+        "low_stock_count": totals["low"],
+        "out_of_stock_count": totals["depleted"],
+        "depleted_names": depleted_names,
+        "remaining_depleted": max(totals["depleted"] - len(depleted_names), 0),
     }
     return render(request, "core/products/summary.html", context)
 
@@ -355,13 +906,20 @@ def products_summary(request):
 def orders_products(request):
     products = Product.objects.filter(Q(stock__gt=0)).order_by("name")
 
-    paginator = Paginator(products, 10)
+    paginator = Paginator(products, POS_PAGE_SIZE)
 
     page_obj = paginator.get_page(1)
+    today_takings = (
+        Order.objects.filter(created__date=timezone.localdate()).aggregate(
+            total=Sum("overall_amount_paid")
+        )["total"]
+        or Decimal("0.00")
+    )
     context = {
         "page_obj": page_obj,
+        "today_takings": today_takings,
     }
-    return render(request, "core/orders/products_for_sale_table.html", context)
+    return render(request, "core/orders/pos_register.html", context)
 
 
 @login_required
@@ -374,16 +932,19 @@ def load_orders_products(request):
         page = int(request.GET.get("p"))
 
     if request.GET.get("s") is not None and request.GET.get("s") != "":
-        products = products.filter(Q(name__icontains=request.GET.get("s"))).order_by(
-            "name"
-        )
+        products = products.filter(
+            Q(name__icontains=request.GET.get("s"))
+            | Q(sku__icontains=request.GET.get("s"))
+        ).order_by("name")
 
-    paginator = Paginator(products, 10)
+    paginator = Paginator(products, POS_PAGE_SIZE)
 
     page_obj = paginator.get_page(page)
 
-    context = {"page_obj": page_obj}
-    return render(request, "core/orders/products_with_stocks_table_rows.html", context)
+    context = {
+        "page_obj": page_obj,
+    }
+    return render(request, "core/orders/pos_product_cards.html", context)
 
 
 @require_POST
@@ -514,53 +1075,7 @@ def make_order(request):
 @login_required
 @user_passes_test(is_admin)
 def shop_cart(request):
-    return render(request, "core/orders/cart_table.html")
-
-
-@login_required
-@user_passes_test(is_admin)
-def get_todays_orders(request):
-    return render(request, "core/orders/cart_table.html")
-
-
-@login_required
-@user_passes_test(is_admin)
-def out_of_stock(request):
-    products = Product.objects.filter(Q(stock=0)).order_by("name")
-
-    paginator = Paginator(products, 10)
-
-    page_obj = paginator.get_page(1)
-    context = {
-        "page_obj": page_obj,
-    }
-    return render(request, "core/products/out_of_stock.html", context)
-
-
-@login_required
-@user_passes_test(is_admin)
-def load_out_of_stock(request):
-    products = Product.objects.filter(Q(stock=0)).order_by("name")
-
-    page = None
-    # if page is set
-    if request.GET.get("p") is not None and request.GET.get("p") != "":
-        page = int(request.GET.get("p"))
-    else:
-        page = 1
-
-    # if search term is set
-    if request.GET.get("s") is not None and request.GET.get("s") != "":
-        products = products.filter(Q(name__icontains=request.GET.get("s"))).order_by(
-            "name"
-        )
-
-    paginator = Paginator(products, 10)
-
-    page_obj = paginator.get_page(page)
-
-    context = {"page_obj": page_obj}
-    return render(request, "core/products/out_of_stock_items.html", context)
+    return render(request, "core/orders/pos_cart_panel.html")
 
 
 def retrieve_todays_sale(
@@ -690,190 +1205,147 @@ def print_order_pdf(request, order_id, order_number):
     return pdf
 
 
-@login_required
-@user_passes_test(is_admin)
-def retrive_reports(request):
-    today = dt.date.today()
-    this_week_number = today.isocalendar().week
-    this_year_number = today.year
-    week_start = dt.date.fromisocalendar(this_year_number, this_week_number, 1)
-    week_end = week_start + dt.timedelta(days=6)
 
-    start_date = f"{week_start:%Y-%m-%d}"
-    end_date = f"{week_end:%Y-%m-%d}"
-    users = Account.objects.all()
-    return render(
-        request,
-        "core/orders/sales_reports.html",
-        {"start_date": start_date, "end_date": end_date, "users": users},
-    )
+def report_ledger_rows(orders_qs):
+    """The per-receipt money columns the reports ledger shows.
 
-
-def generate_reports(order_list):
-    orderitems = OrderItem.objects.filter(order__in=order_list)
-
-    money_field = DecimalField(max_digits=14, decimal_places=2)
-
-    total_cost_expr = ExpressionWrapper(
-        F("qty_bought") * F("product__cost"),
-        output_field=money_field,
-    )
-
-    total_sold_expr = ExpressionWrapper(
-        F("qty_bought") * F("product__price"),
-        output_field=money_field,
-    )
-
-    total_profit_expr = ExpressionWrapper(
-        F("qty_bought") * (
-            F("product__price") - F("product__cost")
-        ),
-        output_field=money_field,
-    )
-
-    orderitems_summary = orderitems.aggregate(
-        total_cost=Sum(total_cost_expr),
-        total_sold=Sum(total_sold_expr),
-        stock_sold=Sum("qty_bought"),
-        total_profit=Sum(total_profit_expr),
-    )
-
-    order_items = (
-        orderitems.values("product__name")
+    Cost and profit come from the current catalogue because OrderItem keeps no
+    snapshot of what a line cost at the time it sold.
+    """
+    lines = OrderItem.objects.filter(order=OuterRef("pk"))
+    return (
+        orders_qs.select_related("user")
         .annotate(
-            sum_qty=Sum("qty_bought"),
-            amount=Sum("paid_amount"),
+            items_count=Count("orderitem"),
+            units=Sum("orderitem__qty_bought"),
+            cost_outlay=Sum(
+                ExpressionWrapper(
+                    F("orderitem__qty_bought") * F("orderitem__product__cost"),
+                    output_field=MONEY_FIELD,
+                )
+            ),
+            line_profit=Sum(
+                ExpressionWrapper(
+                    F("orderitem__qty_bought")
+                    * (F("orderitem__product__price") - F("orderitem__product__cost")),
+                    output_field=MONEY_FIELD,
+                )
+            ),
+            first_item=Subquery(
+                lines.order_by("product__name").values("product__name")[:1]
+            ),
+            first_sku=Subquery(
+                lines.order_by("product__name").values("product__sku")[:1]
+            ),
         )
-        .order_by("-sum_qty")
+        .order_by("-created")
     )
+
+
+def report_ledger_queryset(rng, q=""):
+    """Receipts in the range, optionally narrowed by receipt code."""
+    orders = report_orders(rng)
+    if q:
+        orders = orders.filter(code__icontains=q)
+    return report_ledger_rows(orders)
+
+
+def report_screen_context(params):
+    """One context for the page, the htmx body, the CSV and the PDF, so the
+    screen and its two exports can never disagree about the range."""
+    rng = report_range(params)
+    q = (params.get("q") or "").strip()
+
+    try:
+        page = int(params.get("p") or 1)
+    except ValueError:
+        page = 1
 
     return {
-        "total_cost": orderitems_summary["total_cost"] or Decimal("0.00"),
-        "total_sold": orderitems_summary["total_sold"] or Decimal("0.00"),
-        "stock_sold": orderitems_summary["stock_sold"] or 0,
-        "profit": orderitems_summary["total_profit"] or Decimal("0.00"),
-        "items": order_items,
+        "rng": rng,
+        "report": report_context(rng),
+        "q": q,
+        # the month label is computed, never hardcoded in the template
+        "preset_buttons": (
+            ("today", "Today"),
+            ("yesterday", "Yesterday"),
+            ("7d", "Last 7 Days"),
+            ("mtd", f"MTD: {timezone.localdate():%b %Y}"),
+        ),
+        "page_obj": Paginator(
+            report_ledger_queryset(rng, q), LEDGER_PAGE_SIZE
+        ).get_page(page),
+        "cashiers": Account.objects.order_by("username"),
     }
 
 
-
-@require_POST
 @login_required
 @user_passes_test(is_admin)
-def retrive_reports_by_duration(request):
-    duration = "weekly"
-    if request.POST.get("duration") != "":
-        duration = request.POST.get("duration")
-    today = dt.date.today()
-
-    # each duration gets a concrete [start, end) date range, which also
-    # feeds the "Download Reports" link in report.html
-    if duration == "weekly":
-        week_start = dt.date.fromisocalendar(
-            today.isocalendar().year, today.isocalendar().week, 1
-        )
-        start_date = week_start
-        end_date = week_start + dt.timedelta(days=6)
-        order_lists = Order.objects.filter(
-            created__date__gte=start_date, created__date__lte=end_date
-        )
-    elif duration == "monthly":
-        start_date = today.replace(day=1)
-        end_date = start_date + dt.timedelta(days=31)
-        end_date = end_date.replace(day=1) - dt.timedelta(days=1)
-        order_lists = Order.objects.filter(
-            created__date__gte=start_date, created__date__lte=end_date
-        )
-    elif duration == "yearly":
-        start_date = dt.date(year=today.year, month=1, day=1)
-        end_date = dt.date(year=today.year, month=12, day=31)
-        order_lists = Order.objects.filter(
-            created__date__gte=start_date, created__date__lte=end_date
-        )
-    else:
-        start_date = today
-        end_date = today
-        order_lists = Order.objects.filter(created__date=today)
-
-    summary = generate_reports(order_lists)
+def sales_report_body(request):
+    """KPIs, breakdowns and ledger for the selected range."""
     return render(
-        request,
-        "core/orders/report.html",
-        {
-            "summary": summary,
-            "start_date": start_date,
-            "end_date": end_date,
-            "users": "all",
-        },
-    )
-
-
-@require_POST
-@login_required
-@user_passes_test(is_admin)
-def retrive_reports_by_dates(request):
-    start_date_str = request.POST.get("date_start")
-    end_date_str = request.POST.get("date_end")
-    users = request.POST.get("users")
-    start_date = None
-    end_date = None
-    order_lists: QuerySet[Order] = []
-    summary = None
-
-    if start_date_str != "":
-        start_date = timezone.make_aware(
-            dt.datetime.strptime(start_date_str, "%Y-%m-%d") + dt.timedelta(hours=6)
-        )
-
-    if end_date_str != "":
-        end_date = timezone.make_aware(dt.datetime.strptime(end_date_str, "%Y-%m-%d"))
-
-    if start_date is not None and end_date is not None:
-        order_lists = Order.objects.filter(
-            Q(created__date__gte=start_date.date()),
-            Q(created__date__lte=end_date.date()),
-        )
-    if users != "all":
-        users = Account.objects.get(pk=users)
-        order_lists = order_lists.filter(user=users)
-
-    summary = generate_reports(order_list=order_lists)
-
-    return render(
-        request,
-        "core/orders/report.html",
-        {
-            "summary": summary,
-            "start_date": start_date.date(),
-            "end_date": end_date.date(),
-            "users": users,
-        },
+        request, "core/orders/report_body.html", report_screen_context(request.GET)
     )
 
 
 @login_required
 @user_passes_test(is_admin)
-def retrive_reports_print(request, start_date, end_date, users):
-    today = dt.datetime.now()
-    todays_date = f"{today:%d%m%Y%H%M%S}"
-    filename = "Reports_%s.pdf" % (todays_date)
-    context = None
-    if start_date is not None and end_date is not None:
-        order_lists = Order.objects.filter(created__range=(start_date, end_date))
+def sales_report_ledger(request):
+    """Ledger rows on their own, so paging never re-runs the aggregates."""
+    return render(
+        request,
+        "core/orders/report_ledger_rows.html",
+        report_screen_context(request.GET),
+    )
 
-        if users != "all":
-            users = Account.objects.get(username=users)
-            order_lists = order_lists.filter(user=users)
-        context = generate_reports(order_list=order_lists)
 
-        context["start_date"] = dt.datetime.strptime(start_date, "%Y-%m-%d")
-        context["end_date"] = dt.datetime.strptime(end_date, "%Y-%m-%d")
-        context["users"] = users
+@require_GET
+@login_required
+@user_passes_test(is_admin)
+def sales_report_csv(request):
+    rng = report_range(request.GET)
+    q = (request.GET.get("q") or "").strip()
 
-    pdf = render_attached_pdf(
+    stamp = timezone.localtime().strftime("%Y%m%d_%H%M%S")
+    response = HttpResponse(content_type="text/csv")
+    response["Content-Disposition"] = (
+        f'attachment; filename="sales_report_{rng["start"]:%Y%m%d}_{stamp}.csv"'
+    )
+
+    writer = csv.writer(response)
+    writer.writerow(
+        ["S/No", "Receipt", "Date", "Time", "Cashier", "Units", "Cost", "Total", "Profit"]
+    )
+    for number, order in enumerate(
+        report_ledger_queryset(rng, q).iterator(), start=1
+    ):
+        local_created = timezone.localtime(order.created)
+        writer.writerow(
+            [
+                number,
+                order.code,
+                f"{local_created:%Y-%m-%d}",
+                f"{local_created:%H:%M:%S}",
+                order.user.username,
+                order.units or 0,
+                order.cost_outlay or Decimal("0.00"),
+                order.overall_amount_paid,
+                order.line_profit or Decimal("0.00"),
+            ]
+        )
+    return response
+
+
+@require_GET
+@login_required
+@user_passes_test(is_admin)
+def sales_report_pdf(request):
+    context = report_screen_context(request.GET)
+    context["rows"] = report_ledger_queryset(context["rng"], context["q"])
+
+    stamp = timezone.localtime().strftime("%d%m%Y%H%M%S")
+    return render_attached_pdf(
         relative_template_path="core/orders/prints/all_reports.html",
         context=context,
-        file_name=filename,
+        file_name=f"Reports_{stamp}.pdf",
     )
-
-    return pdf

@@ -29,11 +29,6 @@ urlpatterns = [
                     name="import-products-status",
                 ),
                 path(
-                    "remove-products/",
-                    views.remove_all_products,
-                    name="remove-products",
-                ),
-                path(
                     "remove-products/question",
                     views.remove_all_products_question,
                     name="remove-products-question",
@@ -49,19 +44,19 @@ urlpatterns = [
                     name="remove-products-status",
                 ),
                 path(
-                    "get-product-action-buttons",
-                    views.get_product_action_buttons,
-                    name="get-product-action-buttons",
-                ),
-                path(
                     "add-product",
                     views.add_product,
                     name="add-product",
                 ),
                 path(
                     "<uuid:product_id>/update-product",
-                    views.update_product,
+                    views.add_product,
                     name="update-product",
+                ),
+                path(
+                    "<uuid:product_id>/restock-product",
+                    views.restock_product,
+                    name="restock-product",
                 ),
                 path(
                     "<uuid:product_id>/remove-product",
@@ -72,12 +67,6 @@ urlpatterns = [
                     "<uuid:product_id>/remove-product/do",
                     views.do_remove_a_product,
                     name="do-remove-a-product",
-                ),
-                path("out-of-stock/", views.out_of_stock, name="out-of-stock"),
-                path(
-                    "out-of-stock/load",
-                    views.load_out_of_stock,
-                    name="load-out-of-stock",
                 ),
             ]
         ),
@@ -95,6 +84,16 @@ urlpatterns = [
                 ),
                 path("make-order/", views.make_order, name="make-order"),
                 path("check-orders/", views.today_orders, name="today-orders"),
+                path(
+                    "check-orders/ledger/",
+                    views.orders_ledger,
+                    name="orders-ledger",
+                ),
+                path(
+                    "check-orders/export-csv/",
+                    views.export_orders_csv,
+                    name="orders-export-csv",
+                ),
                 path(
                     "check-orders/days",
                     views.fetch_days_orders,
@@ -117,24 +116,24 @@ urlpatterns = [
                     name="print-order-pdf",
                 ),
                 path(
-                    "sales-reports",
-                    views.retrive_reports,
-                    name="sales-reports",
+                    "sales-reports/body/",
+                    views.sales_report_body,
+                    name="sales-report",
                 ),
                 path(
-                    "sales-reports/by_duration/",
-                    views.retrive_reports_by_duration,
-                    name="sales-reports-duration",
+                    "sales-reports/ledger/",
+                    views.sales_report_ledger,
+                    name="sales-report-ledger",
                 ),
                 path(
-                    "sales-reports/by_dates/",
-                    views.retrive_reports_by_dates,
-                    name="sales-reports-dates",
+                    "sales-reports/export-csv/",
+                    views.sales_report_csv,
+                    name="sales-report-csv",
                 ),
                 path(
-                    "sales-reports/by_dates/print-pdf/<start_date>/<end_date>/<users>/",
-                    views.retrive_reports_print,
-                    name="print-reports",
+                    "sales-reports/print-pdf/",
+                    views.sales_report_pdf,
+                    name="sales-report-pdf",
                 ),
             ]
         ),

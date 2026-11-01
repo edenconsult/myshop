@@ -21,6 +21,7 @@ dependencies = [
     "django-tailwind>=4.6.0",
     "django-widget-tweaks>=1.5.1",
     "django-wkhtmltopdf>=3.4.0",
+    "ipython>=9.18.0",
     "pdfkit>=0.6.0",
     "pillow>=13.0.0",
     "pip>=26.2.2",

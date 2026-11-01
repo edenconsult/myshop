@@ -1,0 +1,178 @@
+{% load humanize %}
+{% load icons %}
+{# Reports body — KPIs, breakdowns and the ledger for one range. #}
+{# Rendered inline by ?view=reports and swapped whole by the filter bar. #}
+
+{% if report.kpi.order_count == 0 %}
+  <div class="flex flex-col items-start gap-2 rounded-xl border border-dashed border-slate-300 bg-white p-4 dark:border-slate-700 dark:bg-slate-900 sm:flex-row sm:items-center">
+    {% icon 'inbox' 'text-[22px] text-slate-400 dark:text-slate-500' %}
+    <div>
+      <p class="text-sm font-semibold text-slate-900 dark:text-slate-100">No sales in this range</p>
+      <p class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+        Nothing was rung up{% if rng.cashier %} by {{ rng.cashier }}{% endif %}
+        {% if rng.start == rng.end %}on {{ rng.start|date:"M j, Y" }}.{% else %}between {{ rng.start|date:"M j" }} and {{ rng.end|date:"M j, Y" }}.{% endif %}
+        Pick another window or clear the cashier filter.
+      </p>
+    </div>
+  </div>
+{% endif %}
+
+{# ---------- KPI cards ---------- #}
+<div class="grid grid-cols-1 gap-3 sm:grid-cols-2 2xl:grid-cols-4">
+  {% include "core/orders/report_kpi_card.html" with kind="units" label="Products Sold" sub="Units rung up in the window" value=report.kpi.units delta=report.kpi.units_delta_pct note=report.kpi.order_count note_suffix="receipts" %}
+
+  {% include "core/orders/report_kpi_card.html" with kind="revenue" label="Gross Revenue" sub="What the receipts charged" value=report.kpi.revenue money=True delta=report.kpi.revenue_delta_pct note=report.kpi.aov note_suffix="avg per receipt" note_money=True %}
+
+  {% include "core/orders/report_kpi_card.html" with kind="cost" label="Cost Outlay" sub="Catalogue cost of those units" value=report.kpi.cost money=True ratio=report.kpi.cost_share_pct note=report.kpi.profit_multiplier note_suffix="on cost" note_mult=True %}
+
+  {% include "core/orders/report_kpi_card.html" with kind="profit" label="Realized Profit" sub="Revenue less cost outlay" value=report.kpi.profit money=True accent=True delta=report.kpi.profit_delta_pct note=report.kpi.margin_pct note_suffix="margin" note_pct=True %}
+</div>
+
+{# ---------- Breakdowns ---------- #}
+<div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
+
+  {# Sales by Cashier replaces the mockup's tender split: this store records no tender type. #}
+  <section class="flex flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+    <div class="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-3 dark:border-slate-800">
+      <div class="flex items-center gap-2">
+        {% icon 'groups' 'text-[20px] text-emerald-700 dark:text-emerald-400' %}
+        <div>
+          <h2 class="text-sm font-semibold text-slate-900 dark:text-slate-100">Sales by Cashier</h2>
+          <p class="text-[11px] text-slate-500 dark:text-slate-400">Who rang up the receipts in this window</p>
+        </div>
+      </div>
+      <span class="tnum rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:bg-slate-800/60 dark:text-slate-400">
+        {{ report.by_cashier|length }} register{{ report.by_cashier|length|pluralize }}
+      </span>
+    </div>
+
+    {% if report.by_cashier %}
+      <div class="flex h-2.5 w-full overflow-hidden bg-slate-100 dark:bg-slate-800" aria-hidden="true">
+        {% for row in report.by_cashier %}
+          <span class="h-full {% cycle 'bg-emerald-500' 'bg-rose-400' 'bg-sky-500' 'bg-amber-400' 'bg-violet-500' 'bg-teal-400' %}"
+                style="width: {{ row.share_pct|floatformat:1 }}%"></span>
+        {% endfor %}
+      </div>
+      <ul class="divide-y divide-slate-100 dark:divide-slate-800">
+        {% for row in report.by_cashier %}
+          <li class="flex items-center justify-between gap-3 px-4 py-3">
+            <div class="flex min-w-0 items-center gap-2.5">
+              <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-emerald-50 text-[11px] font-bold text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400">
+                {{ row.name|slice:":2"|upper }}
+              </span>
+              <div class="min-w-0">
+                <p class="truncate text-sm font-medium text-slate-900 dark:text-slate-100">{{ row.name }}</p>
+                <p class="tnum text-[11px] uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                  {{ row.orders }} receipt{{ row.orders|pluralize }} · {{ row.share_pct|floatformat:1 }}% of revenue
+                </p>
+              </div>
+            </div>
+            <span class="tnum shrink-0 text-sm font-semibold text-slate-900 dark:text-slate-100">
+              GH₵ {{ row.revenue|floatformat:2|intcomma }}
+            </span>
+          </li>
+        {% endfor %}
+      </ul>
+      <div class="mt-auto flex items-center justify-between border-t border-slate-100 bg-slate-50/70 px-4 py-3 dark:border-slate-800 dark:bg-slate-950/40">
+        <span class="text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Revenue audited</span>
+        <span class="tnum text-sm font-bold text-emerald-700 dark:text-emerald-400">
+          GH₵ {{ report.kpi.revenue|floatformat:2|intcomma }}
+        </span>
+      </div>
+    {% else %}
+      <p class="px-4 py-10 text-center text-xs text-slate-500 dark:text-slate-400">
+        No receipts to attribute in this range.
+      </p>
+    {% endif %}
+  </section>
+
+  {# ---------- Departments ---------- #}
+  <section class="flex flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+    <div class="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-3 dark:border-slate-800">
+      <div class="flex items-center gap-2">
+        {% icon 'category' 'text-[20px] text-emerald-700 dark:text-emerald-400' %}
+        <div>
+          <h2 class="text-sm font-semibold text-slate-900 dark:text-slate-100">Sales by Department</h2>
+          <p class="text-[11px] text-slate-500 dark:text-slate-400">Line value grouped by product category</p>
+        </div>
+      </div>
+      <span class="tnum rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:bg-slate-800/60 dark:text-slate-400">
+        {{ report.categories_active }} activ{{ report.categories_active|pluralize:"e,es" }}
+      </span>
+    </div>
+
+    {% if report.by_category %}
+      <div class="grid grid-cols-1 gap-3 p-4 sm:grid-cols-2">
+        {% for row in report.by_category %}
+          <div class="rounded-lg border border-slate-200 bg-slate-50/60 p-3 dark:border-slate-800 dark:bg-slate-950/40">
+            <div class="flex items-baseline justify-between gap-2">
+              <span class="text-sm font-semibold text-slate-900 dark:text-slate-100">{{ row.label }}</span>
+              <span class="tnum text-[11px] font-semibold text-emerald-700 dark:text-emerald-400">{{ row.share_pct|floatformat:1 }}%</span>
+            </div>
+            <div class="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
+              <span class="block h-full rounded-full bg-emerald-500" style="width: {{ row.share_pct|floatformat:1 }}%"></span>
+            </div>
+            <div class="tnum mt-2 flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400">
+              <span>{{ row.units }} unit{{ row.units|pluralize }}</span>
+              <span class="font-semibold text-slate-700 dark:text-slate-200">GH₵ {{ row.revenue|floatformat:2|intcomma }}</span>
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+
+      {% if report.top_sku %}
+        <div class="mt-auto flex flex-wrap items-center gap-3 border-t border-slate-100 bg-emerald-50/60 px-4 py-3 dark:border-slate-800 dark:bg-emerald-500/5">
+          {% icon 'trophy' 'text-[18px] text-amber-500' %}
+          <div class="min-w-0 flex-1">
+            <p class="text-[11px] font-semibold uppercase tracking-wider text-emerald-800 dark:text-emerald-400">
+              Best seller by units
+            </p>
+            <p class="truncate text-sm font-semibold text-slate-900 dark:text-slate-100">
+              {{ report.top_sku.name }}
+              <span class="tnum ml-1 text-[11px] font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                {{ report.top_sku.sku|default:"no SKU" }}
+              </span>
+            </p>
+          </div>
+          <div class="tnum text-right">
+            <p class="text-sm font-bold text-slate-900 dark:text-slate-100">{{ report.top_sku.units }} units</p>
+            <p class="text-[11px] text-slate-500 dark:text-slate-400">GH₵ {{ report.top_sku.revenue|floatformat:2|intcomma }}</p>
+          </div>
+        </div>
+      {% endif %}
+    {% else %}
+      <p class="px-4 py-10 text-center text-xs text-slate-500 dark:text-slate-400">
+        No product lines sold in this range.
+      </p>
+    {% endif %}
+  </section>
+</div>
+
+{# ---------- Ledger ---------- #}
+<section class="flex flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+  <div class="flex flex-col gap-3 px-4 py-3 md:flex-row md:items-center md:justify-between">
+    <div class="flex items-center gap-2">
+      {% icon 'table' 'text-[20px] text-emerald-700 dark:text-emerald-400' %}
+      <div>
+        <h2 class="text-sm font-semibold text-slate-900 dark:text-slate-100">Transaction Ledger</h2>
+        <p class="text-[11px] text-slate-500 dark:text-slate-400">
+          Every receipt in the window, with its cost outlay and realized profit
+        </p>
+      </div>
+    </div>
+    <div class="relative w-full md:w-72">
+      <label class="sr-only" for="report-q">Filter by receipt code</label>
+      {% icon 'search' 'pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[18px] text-slate-500 dark:text-slate-400' %}
+      <input id="report-q"
+             type="search"
+             x-model="q"
+             @keyup.enter="fetchRows(1)"
+             placeholder="Filter by receipt code…"
+             class="h-9 w-full rounded-lg border border-slate-200 bg-slate-50 pl-9 pr-3 text-sm text-slate-900 placeholder:text-slate-500 focus:border-emerald-600 focus:bg-white focus:outline-none focus:ring-1 focus:ring-emerald-600/40 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-100 dark:placeholder:text-slate-500 dark:focus:bg-slate-950">
+    </div>
+  </div>
+
+  <div id="report_rows" class="border-t border-slate-100 dark:border-slate-800">
+    {% include "core/orders/report_ledger_rows.html" %}
+  </div>
+</section>

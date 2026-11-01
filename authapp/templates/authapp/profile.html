@@ -1,0 +1,72 @@
+{% extends '_base.html' %}
+{% load icons %}
+
+{% block title %}Your profile - {% endblock title %}
+
+{% block content %}
+  <section class="mx-auto w-full max-w-2xl rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900 md:p-8">
+    <h1 class="text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-100">Your profile</h1>
+    <p class="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400">
+      These are the details shown against the sales you record. Your username and role are
+      handled by an administrator.
+    </p>
+
+    {% if request.GET.saved %}
+      <p role="status"
+         class="mt-5 inline-flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-800 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300">
+        {% icon 'check_circle' 'text-[18px]' %}
+        <span>Profile updated.</span>
+      </p>
+    {% endif %}
+
+    <form method="post" class="mt-6 flex flex-col gap-4">
+      {% csrf_token %}
+
+      <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div class="flex flex-col gap-1">
+          <label class="text-xs font-semibold uppercase tracking-wide text-slate-700 dark:text-slate-200"
+                 for="{{ form.first_name.id_for_label }}">
+            First name
+          </label>
+          {{ form.first_name }}
+          {% if form.first_name.errors %}<p class="text-[11px] font-medium text-rose-600 dark:text-rose-400">{{ form.first_name.errors.0 }}</p>{% endif %}
+        </div>
+        <div class="flex flex-col gap-1">
+          <label class="text-xs font-semibold uppercase tracking-wide text-slate-700 dark:text-slate-200"
+                 for="{{ form.last_name.id_for_label }}">
+            Last name
+          </label>
+          {{ form.last_name }}
+          {% if form.last_name.errors %}<p class="text-[11px] font-medium text-rose-600 dark:text-rose-400">{{ form.last_name.errors.0 }}</p>{% endif %}
+        </div>
+      </div>
+
+      <div class="flex flex-col gap-1">
+        <label class="text-xs font-semibold uppercase tracking-wide text-slate-700 dark:text-slate-200"
+               for="{{ form.email.id_for_label }}">
+          Email
+        </label>
+        {{ form.email }}
+        {% if form.email.errors %}<p class="text-[11px] font-medium text-rose-600 dark:text-rose-400">{{ form.email.errors.0 }}</p>{% endif %}
+      </div>
+
+      <div class="flex flex-col gap-1">
+        <label class="text-xs font-semibold uppercase tracking-wide text-slate-700 dark:text-slate-200"
+               for="{{ form.telephone.id_for_label }}">
+          Phone
+        </label>
+        {{ form.telephone }}
+        {% if form.telephone.errors %}<p class="text-[11px] font-medium text-rose-600 dark:text-rose-400">{{ form.telephone.errors.0 }}</p>{% endif %}
+        <span class="text-[11px] text-slate-500 dark:text-slate-400">Up to 10 digits.</span>
+      </div>
+
+      <div class="mt-2 flex items-center gap-3">
+        <button type="submit"
+                class="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-emerald-700 dark:bg-emerald-500 dark:text-slate-950 dark:hover:bg-emerald-400">
+          {% icon 'save' 'text-[18px]' %}
+          <span>Save changes</span>
+        </button>
+      </div>
+    </form>
+  </section>
+{% endblock content %}

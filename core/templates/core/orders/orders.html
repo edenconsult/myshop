@@ -1,20 +1,33 @@
 {% extends "core/_core_base.html" %}
 {% load humanize %}
 {% block title %}
-  Orders |
+  {% if initial_view == 'pos' %}
+    Point of Sale
+  {% elif initial_view == 'reports' %}
+    Sales Reports
+  {% else %}
+    Orders
+  {% endif %}
+  |
 {% endblock title %}
-{% block nav %}
-  {% include "core/partials/nav.html" %}
-{% endblock nav %}
+{% block main_class %}
+  {% if initial_view == 'pos' or initial_view == 'orders' or initial_view == 'reports' %}
+    mx-auto flex w-full max-w-[1700px] flex-col gap-4 px-3 pb-10 pt-20 sm:px-5 lg:px-8
+  {% else %}
+    {{ block.super }}
+  {% endif %}
+{% endblock main_class %}
 {% block content %}
-  <div>
-    <div class="grid grid-cols-5 gap-y-16 gap-x-10 w-full h-full">
-      <div class="col-span-4"
-           id="results"
-           hx-trigger="load, reload_summary"
-           hx-target="this"
-           hx-get="{% url 'core:sales-reports' %}"></div>
-      <div class="flex flex-col space-y-6 py-6 " id="orders_links">{% include "core/orders/orders_buttons.html" %}</div>
-    </div>
-  </div>
+  {% if initial_view == 'pos' %}
+    {# The register owns the whole viewport, so the tab switcher column is dropped. #}
+    <div id="results"
+         class="w-full"
+         hx-target="this"
+         hx-trigger="load, reload_summary"
+         hx-get="{% url 'core:orders-products' %}"></div>
+  {% elif initial_view == 'orders' %}
+    {% include "core/orders/orders_ledger.html" %}
+  {% else %}
+    {% include "core/orders/sales_reports.html" %}
+  {% endif %}
 {% endblock content %}

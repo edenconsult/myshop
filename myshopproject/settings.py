@@ -6,8 +6,10 @@ from dotenv import load_dotenv
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# Load environment variables from the project's .env file
-load_dotenv(BASE_DIR / ".env")
+# Load environment variables from the project's .env file. override=True:
+# shells that exported the old values (redis://localhost costs ~2s per new
+# connection because Redis binds IPv4 only) must not outrank the file
+load_dotenv(BASE_DIR / ".env", override=True)
 
 env = os.environ.get
 
@@ -140,8 +142,10 @@ USE_TZ = True
 
 STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "productionfiles"
+# The one source tree: Tailwind and the icon sprite build into static/, and
+# collectstatic copies from here into STATIC_ROOT above.
 STATICFILES_DIRS = [
-    BASE_DIR / "staticfiles",
+    BASE_DIR / "static",
 ]
 
 MEDIA_URL = "/media/"
@@ -152,11 +156,13 @@ MEDIA_ROOT = os.path.join(BASE_DIR, "media")
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 COMPRESS_ROOT = BASE_DIR / "productionfiles"
-COMPRESS_ENABLED = True
+# Only compress for a real deployment. In development the raw static/src/output.css
+# is served, so a Tailwind rebuild shows up without running collectstatic first.
+COMPRESS_ENABLED = not DEBUG
 STATICFILES_FINDERS = (
-    "compressor.finders.CompressorFinder",
     "django.contrib.staticfiles.finders.FileSystemFinder",
     "django.contrib.staticfiles.finders.AppDirectoriesFinder",
+    "compressor.finders.CompressorFinder",
 )
 
 # AUTHENTICATION SETTINGS
@@ -167,5 +173,5 @@ LOGOUT_REDIRECT_URL = "auth:login"
 
 
 # Celery settings
-CELERY_BROKER_URL = env("CELERY_BROKER_URL", default="redis://localhost:6379")
-CELERY_RESULT_BACKEND = env("CELERY_RESULT_BACKEND", default="redis://localhost:6379")
+CELERY_BROKER_URL = env("CELERY_BROKER_URL", default="redis://127.0.0.1:6379")
+CELERY_RESULT_BACKEND = env("CELERY_RESULT_BACKEND", default="redis://127.0.0.1:6379")

@@ -1,60 +1,136 @@
 {% extends '_base.html' %}
-{% load widget_tweaks %}
-{% block title %}Login - {% endblock title %}
+{% load icons %}
+{% load static %}
+{% block title %}Sign in | {% endblock title %}
+{% block body_class %}min-h-screen bg-slate-100 font-sans text-slate-900 antialiased dark:bg-slate-950 dark:text-slate-100{% endblock body_class %}
 {% block body %}
-<main class="login_page h-full relative">
-  <div class="absolute top-0 right-0 w-1/2 bg-gray-900 h-full text-white">
-    <div class="flex flex-col pt-16 justify-center">
-      <div class="mb-16 px-16 flex flex-col">
-        <span class="uppercase text-sm leading-tight mb-2">Welcome to </span>
-        <h1 class="text-4xl text-yellow-500 font-semibold">Noble Cosmetics Ltd</h1>
-      </div>
-      <div class="px-16 w-full">
-        <form class="login_form" action="{% url 'auth:login' %}" method="post">
-          {% csrf_token %}
-          <div class="border-b-2 mb-6 border-gray-900">
-            <span class="text-2xl font-light">Enter your credentials to login</span>
+  <main id="main-content" class="flex min-h-screen flex-col justify-center px-3 py-8 sm:px-5">
+    <div class="mx-auto w-full max-w-5xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-lg dark:border-slate-800 dark:bg-slate-900">
+      <div class="grid grid-cols-1 md:grid-cols-[1.05fr_1fr]">
+
+        <!-- Store brand -->
+        <section class="flex flex-col justify-between gap-8 bg-slate-50 p-6 md:p-8 dark:bg-slate-950/40">
+          <div class="flex items-center gap-3">
+            <span class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-emerald-600 text-white shadow-sm dark:bg-emerald-500 dark:text-slate-950">
+              {% icon 'spa' 'text-[24px]' %}
+            </span>
+            <span class="leading-tight">
+              <span class="block text-base font-semibold tracking-tight text-slate-900 dark:text-slate-100">Noble Cosmetics</span>
+              <span class="block text-[10px] font-medium uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Store Central Hub</span>
+            </span>
           </div>
-          <div class="">
-            <div class="field-stacked">
-              <label for="username" class="">Username</label>
-              <div class="input">
-                <input type="text" style="padding:8px 10px; border-radius: 5px;font-size:16px;" name="username"
-                  id="username" placeholder="Enter Username" value="{{ username }}" {% if validations.username_error %}
-                  class="border-red-500" {% endif %} />
-                {% if validations.username_error %}
-                <ul class="errorlist text-red-600 text-xs">
-                  <li>{{ validations.username_error_message }}</li>
-                </ul>
-                {% endif %}
-              </div>
-            </div>
-            <div class="field-stacked ">
-              <label for="password" class="">Password</label>
-              <div class="input">
-                <input {% if validations.password_error %} class="border-red-500" {% endif %} type="password"
-                  style="padding: 8px 10px; border-radius: 5px; font-size:16px;" name="password" id="password"
-                  placeholder="Enter Password" />
-                {% if validations.password_error %}
-                <ul class="errorlist text-red-600 text-xs">
-                  <li>{{ validations.password_error_message }}</li>
-                </ul>
-                {% endif %}
-              </div>
-            </div>
+
+          <div class="max-w-sm">
+            <h1 class="text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-100 md:text-3xl">
+              Sign in to Store #01
+            </h1>
+            <p class="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400">
+              Ring up customer sales at the register, keep the stock ledger accurate and review the day's
+              takings — all from one account.
+            </p>
+          </div>
+
+          <ul class="flex flex-wrap gap-x-5 gap-y-2 text-xs font-medium text-slate-500 dark:text-slate-400">
+            <li class="flex items-center gap-1.5">
+              <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-600 dark:bg-emerald-400" aria-hidden="true"></span>
+              Point of sale
+            </li>
+            <li class="flex items-center gap-1.5">
+              <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-600 dark:bg-emerald-400" aria-hidden="true"></span>
+              Products &amp; stock
+            </li>
+            <li class="flex items-center gap-1.5">
+              <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-600 dark:bg-emerald-400" aria-hidden="true"></span>
+              Orders &amp; reports
+            </li>
+          </ul>
+        </section>
+
+        <!-- Credentials -->
+        <section class="flex flex-col justify-center p-6 md:p-8">
+          <form class="flex flex-col gap-5" action="{% url 'auth:login' %}" method="post">
+            {% csrf_token %}
+
             {% if validations.form_has_error %}
-            <div class="flex items-center justify-center text-center space-x-2 form_error">
-              <p class="text-xs text-red-600">{{ validations.form_error_message }}</p>
-            </div>
+              <div role="alert"
+                   class="flex items-start gap-2 rounded-lg bg-rose-50 px-3 py-2.5 text-xs font-medium text-rose-700 dark:bg-rose-950/40 dark:text-rose-400">
+                {% icon 'error' 'text-[18px]' %}
+                <p>{{ validations.form_error_message }}</p>
+              </div>
             {% endif %}
 
+            <div class="flex flex-col gap-1.5">
+              <label class="text-xs font-semibold uppercase tracking-wide text-slate-700 dark:text-slate-200" for="username">
+                Username
+              </label>
+              <input type="text"
+                     name="username"
+                     id="username"
+                     value="{{ username }}"
+                     placeholder="Enter Username"
+                     autocomplete="username"
+                     autofocus
+                     {% if validations.username_error %}aria-invalid="true" aria-describedby="username-error"{% endif %}
+                     class="min-h-[44px] w-full rounded-lg border bg-white px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition-colors placeholder:text-slate-400 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/30 dark:bg-slate-900 dark:text-slate-100 dark:placeholder:text-slate-500 {% if validations.username_error %}border-rose-500 dark:border-rose-500{% else %}border-slate-300 dark:border-slate-700{% endif %}">
+              {% if validations.username_error %}
+                <p id="username-error" class="text-[11px] font-medium text-rose-600 dark:text-rose-400">
+                  {{ validations.username_error_message }}
+                </p>
+              {% endif %}
+            </div>
 
-          </div>
-          <input type="submit" value="Login"
-            class="w-1/2 px-2 py-2 rounded-md text-sm font-semibold uppercase bg-green-600 cursor-pointer hover:bg-green-700" />
-        </form>
+            <div class="flex flex-col gap-1.5">
+              <label class="text-xs font-semibold uppercase tracking-wide text-slate-700 dark:text-slate-200" for="password">
+                Password
+              </label>
+              <input type="password"
+                     name="password"
+                     id="password"
+                     placeholder="Enter Password"
+                     autocomplete="current-password"
+                     {% if validations.password_error %}aria-invalid="true" aria-describedby="password-error"{% endif %}
+                     class="min-h-[44px] w-full rounded-lg border bg-white px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition-colors placeholder:text-slate-400 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/30 dark:bg-slate-900 dark:text-slate-100 dark:placeholder:text-slate-500 {% if validations.password_error %}border-rose-500 dark:border-rose-500{% else %}border-slate-300 dark:border-slate-700{% endif %}">
+              {% if validations.password_error %}
+                <p id="password-error" class="text-[11px] font-medium text-rose-600 dark:text-rose-400">
+                  {{ validations.password_error_message }}
+                </p>
+              {% endif %}
+            </div>
+
+            <button type="submit"
+                    class="mt-1 inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold uppercase tracking-wide text-white shadow-sm transition-colors hover:bg-emerald-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600 active:scale-[0.99] dark:bg-emerald-500 dark:text-slate-950 dark:hover:bg-emerald-400">
+              Log In
+            </button>
+          </form>
+        </section>
       </div>
+
+      <!-- Developer credit -->
+      <footer class="flex flex-col gap-4 border-t border-slate-200 bg-slate-50 px-6 py-5 sm:flex-row sm:items-center sm:justify-between dark:border-slate-800 dark:bg-slate-950/60 md:px-8">
+        <a href="https://ecreativesys.com"
+           target="_blank"
+           rel="noopener"
+           class="group flex items-center gap-3 rounded-lg focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-emerald-600">
+          <span class="flex h-14 w-16 shrink-0 items-center justify-center rounded-lg bg-white p-1.5 shadow-sm ring-1 ring-slate-200/70 dark:ring-slate-200">
+            <img src="{% static 'images/eden-logo.png' %}" alt="" width="320" height="299" class="h-11 w-auto">
+          </span>
+          <span class="leading-tight">
+            <span class="block text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Developed by</span>
+            <span class="block text-sm font-semibold tracking-tight text-slate-900 transition-colors group-hover:text-emerald-700 dark:text-slate-100 dark:group-hover:text-emerald-400">
+              Eden Creative Systems
+            </span>
+            <span class="block text-[11px] text-slate-500 dark:text-slate-400">ecreativesys.com</span>
+          </span>
+        </a>
+
+        <div class="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-500 sm:justify-end dark:text-slate-400">
+          <a class="rounded transition-colors hover:text-emerald-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600 dark:hover:text-emerald-400"
+             href="mailto:berkojohnson@gmail.com">berkojohnson@gmail.com</a>
+          <span aria-hidden="true">·</span>
+          <a class="rounded transition-colors hover:text-emerald-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600 dark:hover:text-emerald-400"
+             href="tel:+233248160391">+233 24 816 0391</a>
+        </div>
+      </footer>
     </div>
-  </div>
-</main>
+  </main>
 {% endblock body %}

@@ -4,6 +4,43 @@ import pdfkit
 from django.template import loader
 from weasyprint import HTML, CSS
 
+import logging
+from pathlib import Path
+
+from django.conf import settings
+from django.contrib.staticfiles import finders
+
+logger = logging.getLogger(__name__)
+
+# Sheets every printed document gets: the compiled Tailwind build plus the
+# page rules that only make sense on paper.
+PRINT_STYLESHEETS = ("src/output.css", "css/print.css")
+
+
+def _resolve_stylesheet(sheet):
+    """Absolute filesystem path for a stylesheet, or None if it is missing.
+
+    Static-relative names are looked up in the collected tree first (that is
+    what a deployment serves), then through the finders so a development
+    checkout without collectstatic still resolves them.
+
+    WeasyPrint deliberately reads from disk rather than following a stylesheet
+    URL: a URL would make the view request its own server, which only works
+    while a dev server happens to be listening on that port and blocks a
+    single-worker deployment.
+    """
+    path = Path(sheet)
+    if path.is_absolute() or path.is_file():
+        return path if path.is_file() else None
+
+    collected = Path(settings.STATIC_ROOT) / sheet
+    if collected.is_file():
+        return collected
+
+    found = finders.find(sheet)
+    return Path(found) if found else None
+
+
 def get_uuid(id):
     import uuid
 
@@ -26,12 +63,21 @@ def is_sale_person(user):
 def image_path(path, instance, filename):
     return f"{path}/{instance.pk}/{filename}"
 
+
 def render_attached_pdf(relative_template_path, context, file_name, css=None):
     html = loader.render_to_string(relative_template_path, context)
 
     stylesheets = []
-    for css_file in (css or []):
-        stylesheets.append(CSS(filename=str(css_file)))
+    for sheet in (*PRINT_STYLESHEETS, *(css or [])):
+        path = _resolve_stylesheet(sheet)
+        if path is None:
+            logger.warning(
+                "Print stylesheet %r not found; %s will render without it.",
+                sheet,
+                file_name,
+            )
+            continue
+        stylesheets.append(CSS(filename=str(path)))
 
     pdf_output = HTML(
         string=html,

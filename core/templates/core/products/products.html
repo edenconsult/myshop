@@ -1,29 +1,199 @@
 {% extends "core/_core_base.html" %}
-{% block title %} Products | {% endblock title %}
-{% block nav %}
-{% include "core/partials/nav.html" %}
-{% endblock nav %}
+{% load humanize %}
+{% load icons %}
+{% block title %}
+  Products &amp; Stock |
+{% endblock title %}
+{% block main_class %}
+  mx-auto flex w-full max-w-[1700px] flex-col gap-4 px-3 pb-10 pt-20 sm:px-5 lg:px-8
+{% endblock main_class %}
 {% block content %}
-  <div x-data="{ids: [], selectAll : false,
+  {# ids is the only selection state, and no double quote may appear inside this #}
+  {# attribute: it would end x-data early and spill the JavaScript onto the page. #}
+  <div x-data="{ids: [],
+    pageIDs() {
+        return [...document.querySelectorAll('input[name=products]')].map((el) => el.value);
+    },
+    get allSelected() {
+        const page = this.pageIDs();
+        return page.length > 0 && page.every((id) => this.ids.includes(id));
+    },
     toggleAllCheckboxes() {
-        this.selectAll = !this.selectAll
-        this.ids = [];
-
-        checkboxes = document.querySelectorAll('input[name=products]');
-        [...checkboxes].map((el) => {
-            el.checked = this.selectAll;
-            (this.selectAll) ? this.ids.push(el.value) : this.ids = [];
-        })
+        this.ids = this.allSelected ? [] : this.pageIDs();
     },}">
-    <div class="grid grid-cols-3 gap-y-16 gap-x-10 w-full">
-      <div id="results"
-           class="col-span-2"
-           hx-get="{% url 'core:load-products' %}?l=10"
-           hx-trigger="load, reload_products_table from:body"
-           hx-target="this"></div>
-      <div class="flex flex-col space-y-6 px-4 py-6"
-           id="new_products"
-           >{% include "core/partials/product_action_buttons.html" %}</div>
+    <!-- Page header -->
+    <div class="flex flex-col gap-3 border-b border-slate-200 pb-4 dark:border-slate-800 md:flex-row md:items-end md:justify-between">
+      <div class="min-w-0">
+        <nav class="flex items-center gap-1 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400"
+             aria-label="Breadcrumb">
+          <a href="{% url 'core:base' %}"
+             class="transition-colors hover:text-slate-900 dark:hover:text-slate-100">Store Central</a>
+          {% icon 'chevron_right' 'text-[14px]' %}
+          <span class="text-emerald-700 dark:text-emerald-400">Stock Ledger</span>
+        </nav>
+        <h1 class="mt-1 text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-100 md:text-[28px]">
+          Products &amp; Inventory
+        </h1>
+        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
+          Live shelf counts, restock thresholds and wholesale/retail pricing for Store #01.
+        </p>
+      </div>
+      <div class="flex shrink-0 flex-wrap items-center gap-2">
+        <button type="button"
+                hx-get="{% url 'core:import-products' %}"
+                hx-target="#modal_root"
+                hx-swap="innerHTML"
+                class="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-sm transition-colors hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800">
+          {% icon 'upload_file' 'text-[18px] text-slate-500 dark:text-slate-400' %}
+          <span>Import CSV</span>
+        </button>
+        <button type="button"
+                hx-get="{% url 'core:add-product' %}"
+                hx-target="#modal_root"
+                hx-swap="innerHTML"
+                class="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3.5 py-2 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-emerald-700 dark:bg-emerald-500 dark:text-slate-950 dark:hover:bg-emerald-400">
+          {% icon 'add_circle' 'text-[18px]' %}
+          <span>Add Single Product</span>
+        </button>
+      </div>
     </div>
+
+    <!-- Valuation cards and depletion banner, refreshed with the table -->
+    <div id="inventory_stats"
+         class="flex flex-col gap-4"
+         hx-target="this"
+         hx-trigger="load, reload_products_table from:body"
+         hx-get="{% url 'core:products-summary' %}"></div>
+
+    <!-- Ledger table, tabs and filters -->
+    <div id="results"
+         class="w-full"
+         hx-target="this"
+         hx-trigger="load, reload_products_table from:body"
+         hx-get="{% url 'core:load-products' %}?l=10&p=1&status={% if initial_status == 'alert' %}alert{% else %}all{% endif %}"></div>
+
+    {# Every dialog is swapped in here so a table refresh never closes it. #}
+    <div id="modal_root"></div>
+
+    {% if initial_view == 'add' %}
+      <div hx-get="{% url 'core:add-product' %}"
+           hx-trigger="load"
+           hx-target="#modal_root"
+           hx-swap="innerHTML"></div>
+    {% elif initial_view == 'import' %}
+      <div hx-get="{% url 'core:import-products' %}"
+           hx-trigger="load"
+           hx-target="#modal_root"
+           hx-swap="innerHTML"></div>
+    {% endif %}
   </div>
 {% endblock content %}
+{% block scripts %}
+  <script>
+    // read at click time, so a row swapped by the stock stepper is never stale
+    window.getProductIDs = () =>
+      [...document.querySelectorAll('input[name="products"]:checked')].map((el) => el.value);
+
+    // Task-queueing buttons answer seconds later than a click expects. Alpine's
+    // :disabled lands a microtask after beforeRequest, so very fast repeats can
+    // still slip through; this disables the element synchronously instead.
+    (() => {
+      if (window.__taskCommitGuard) return;
+      window.__taskCommitGuard = true;
+
+      // forms have no disabled state, and the import button lives outside one
+      const commitsFrom = (elt) =>
+        elt.tagName === "FORM"
+          ? [...elt.querySelectorAll('button[type="submit"]'),
+             ...document.querySelectorAll(`button[type="submit"][form="${elt.id}"]`)]
+          : [elt];
+
+      document.body.addEventListener("htmx:beforeRequest", (event) => {
+        const el = event.detail.elt;
+        if (el.matches("[data-task-commit]")) commitsFrom(el).forEach((button) => (button.disabled = true));
+      });
+      document.body.addEventListener("htmx:afterRequest", (event) => {
+        const el = event.detail.elt;
+        if (el.matches("[data-task-commit]") && el.isConnected) commitsFrom(el).forEach((button) => (button.disabled = false));
+      });
+    })();
+
+    // '/' jumps to the search box, as it does on the register and the orders ledger
+    (() => {
+      if (window.__stockLedgerSearchShortcut) return;
+      window.__stockLedgerSearchShortcut = (event) => {
+        if (event.key !== "/") return;
+        const active = document.activeElement;
+        if (active && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName)) return;
+        const search = document.getElementById("table-search");
+        if (!search) return;
+        event.preventDefault();
+        search.focus();
+      };
+      document.addEventListener("keydown", window.__stockLedgerSearchShortcut);
+    })();
+
+    (() => {
+      if (window.__ledgerModals) return;
+      window.__ledgerModals = true;
+
+      const root = document.getElementById("modal_root");
+      if (!root) return;
+
+      let opener = null;
+      const overlay = () => root.firstElementChild;
+
+      const close = () => {
+        if (!overlay()) return;
+        root.innerHTML = "";
+        document.body.classList.remove("overflow-hidden");
+        opener?.focus();
+        opener = null;
+      };
+
+      const focusable = () =>
+        [...overlay().querySelectorAll(
+          'a[href], button:not([disabled]), input:not([type="hidden"]), select, textarea, [tabindex]:not([tabindex="-1"])',
+        )].filter((el) => el.type !== "hidden" && el.getClientRects().length > 0);
+
+      document.addEventListener("keydown", (event) => {
+        if (!overlay()) return;
+
+        if (event.key === "Escape") {
+          event.preventDefault();
+          close();
+          return;
+        }
+
+        if (event.key !== "Tab") return;
+        const items = focusable();
+        if (items.length === 0) return;
+
+        const first = items[0];
+        const last = items[items.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
+      });
+
+      // a click that lands on the backdrop itself, not the dialog
+      root.addEventListener("mousedown", (event) => {
+        if (event.target === overlay()) close();
+      });
+
+      root.addEventListener("click", (event) => {
+        if (event.target.closest("[data-modal-close]")) close();
+      });
+
+      root.addEventListener("htmx:afterSwap", () => {
+        document.body.classList.add("overflow-hidden");
+        if (!opener) opener = document.activeElement;
+        overlay()?.querySelector("[data-autofocus]")?.focus();
+      });
+    })();
+  </script>
+{% endblock scripts %}

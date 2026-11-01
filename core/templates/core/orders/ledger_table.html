@@ -1,0 +1,97 @@
+{% load humanize %}
+{% load icons %}
+{# Ledger table partial — swapped into #ledger_rows by orders_ledger. #}
+<div class="flex items-center justify-between gap-2 border-b border-slate-200 px-4 py-3 dark:border-slate-800">
+  <div class="flex items-center gap-2">
+    <span class="text-base font-semibold text-slate-900 dark:text-slate-100">
+      {% if date %}Receipts — {{ date }}{% else %}All Receipts{% endif %}
+    </span>
+    <span class="tnum rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-medium uppercase tracking-wider text-slate-500 dark:bg-slate-800/60 dark:text-slate-400">
+      Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }} · {{ page_obj.paginator.count|intcomma }} records
+    </span>
+  </div>
+  {% if date %}
+    <button type="button"
+            @click="showAllDates()"
+            class="text-xs font-semibold text-emerald-700 transition-colors hover:underline dark:text-emerald-400">
+      View Full History
+    </button>
+  {% endif %}
+</div>
+
+<div class="overflow-x-auto">
+  <table class="w-full border-collapse text-left text-sm">
+    <thead>
+      <tr class="bg-slate-50 text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:bg-slate-950/60 dark:text-slate-400">
+        <th scope="col" class="px-4 py-3">Receipt</th>
+        <th scope="col" class="px-3 py-3">Time</th>
+        <th scope="col" class="hidden px-3 py-3 md:table-cell">Basket</th>
+        <th scope="col" class="px-3 py-3">Cashier</th>
+        <th scope="col" class="px-3 py-3 text-right">Total</th>
+        <th scope="col" class="px-3 py-3 text-right">View</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
+      {% for order in page_obj %}
+        <tr class="cursor-pointer border-l-2 border-l-transparent transition-colors hover:bg-emerald-50/60 dark:hover:bg-slate-800/40"
+            hx-get="{% url 'core:view-order' order.id forloop.counter %}"
+            hx-target="#order_details"
+            hx-swap="innerHTML">
+          <td class="px-4 py-3">
+            <div class="tnum font-semibold text-emerald-700 dark:text-emerald-400">#{{ order.code }}</div>
+            <div class="text-[11px] uppercase tracking-wider text-slate-500 dark:text-slate-400">
+              {{ order.created|date:"M j" }} · {{ order.items_count }} item{{ order.items_count|pluralize }}
+            </div>
+          </td>
+          <td class="tnum px-3 py-3 text-slate-600 dark:text-slate-300">{{ order.created|time:"H:i" }}</td>
+          <td class="hidden max-w-[220px] px-3 py-3 text-slate-600 dark:text-slate-300 md:table-cell">
+            <span class="block truncate">{{ order.first_item|default:"—" }}{% if order.items_count > 1 %} <span class="tnum text-slate-400 dark:text-slate-500">+{{ order.items_count|add:"-1" }} more</span>{% endif %}</span>
+          </td>
+          <td class="px-3 py-3 text-slate-600 dark:text-slate-300">{{ order.user.get_full_name|default:order.user.username }}</td>
+          <td class="tnum px-3 py-3 text-right font-semibold text-slate-900 dark:text-slate-100">
+            GH₵ {{ order.overall_amount_paid|floatformat:2|intcomma }}
+          </td>
+          <td class="px-3 py-3 text-right">
+            {% icon 'chevron_right' 'text-[18px] text-slate-400 dark:text-slate-500' %}
+          </td>
+        </tr>
+      {% empty %}
+        <tr>
+          <td colspan="6" class="px-4 py-10 text-center">
+            <p class="text-sm font-semibold text-slate-700 dark:text-slate-200">No receipts match these filters</p>
+            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Try another date, cashier, or receipt code.</p>
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="flex items-center justify-between border-t border-slate-200 bg-slate-50/60 px-4 py-3 text-xs text-slate-500 dark:border-slate-800 dark:bg-slate-950/40 dark:text-slate-400">
+  <span class="tnum">
+    {% if page_obj.paginator.count %}
+      Showing rows {{ page_obj.start_index }}–{{ page_obj.end_index }} of {{ page_obj.paginator.count|intcomma }} records
+    {% else %}
+      No records
+    {% endif %}
+  </span>
+  <div class="flex items-center gap-1">
+    <button type="button"
+            @click="fetchPage({% if page_obj.has_previous %}{{ page_obj.previous_page_number }}{% else %}1{% endif %})"
+            {% if not page_obj.has_previous %}disabled{% endif %}
+            class="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-100 text-slate-700 transition-colors hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-40 dark:bg-slate-800/60 dark:text-slate-200 dark:hover:bg-slate-800">
+      {% icon 'chevron_left' 'text-[18px]' %}
+      <span class="sr-only">Previous page</span>
+    </button>
+    <span class="px-2 text-xs font-semibold text-slate-900 dark:text-slate-100">
+      Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}
+    </span>
+    <button type="button"
+            @click="fetchPage({% if page_obj.has_next %}{{ page_obj.next_page_number }}{% else %}{{ page_obj.number }}{% endif %})"
+            {% if not page_obj.has_next %}disabled{% endif %}
+            class="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-100 text-slate-700 transition-colors hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-40 dark:bg-slate-800/60 dark:text-slate-200 dark:hover:bg-slate-800">
+      {% icon 'chevron_right' 'text-[18px]' %}
+      <span class="sr-only">Next page</span>
+    </button>
+  </div>
+</div>

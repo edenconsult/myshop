@@ -1,5 +1,6 @@
 from django.urls import include, path
-from . import views
+
+from . import batch_views, views
 
 app_name = "core"
 
@@ -57,6 +58,11 @@ urlpatterns = [
                     "<uuid:product_id>/restock-product",
                     views.restock_product,
                     name="restock-product",
+                ),
+                path(
+                    "stock/<uuid:product_id>/adjust/",
+                    batch_views.adjust_stock_question,
+                    name="adjust-stock-question",
                 ),
                 path(
                     "<uuid:product_id>/remove-product",

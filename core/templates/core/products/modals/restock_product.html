@@ -9,9 +9,11 @@
   x-data="{
     shelf: {{ product.stock }},
     threshold: {{ product.low_stock_threshold }},
-    cost: {{ product.cost|floatformat:2 }},
+    catalogueCost: {{ product.cost|floatformat:2 }},
+    unitCost: {{ product.cost|floatformat:2 }},
     price: {{ product.price|floatformat:2 }},
     maxUnits: {{ max_units }},
+    requestKey: crypto.randomUUID(),
     units: 24,
     num(value) {
       const parsed = parseFloat(value);
@@ -31,7 +33,7 @@
       return this.shelf + this.qty;
     },
     get batchCost() {
-      return this.qty * this.cost;
+      return this.qty * this.unitCost;
     },
     get batchRetail() {
       return this.qty * this.price;
@@ -130,20 +132,33 @@
       </p>
     </div>
 
-    <!-- Read-only pricing -->
+    {% comment %}
+      One key per dialog open, so a double click or a slow network that posts
+      the same shipment twice lands in the ledger as one receipt.
+    {% endcomment %}
+    <input type="hidden" name="request_key" :value="requestKey">
+
+    <!-- Cost paid for this shipment, plus the fixed retail price -->
     <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
       <div class="flex flex-col gap-1">
         <label class="text-xs font-semibold uppercase tracking-wide text-slate-700 dark:text-slate-200" for="restock_cost">
-          Unit Cost Price (GH₵)
+          Unit Cost Price (GH₵) <span class="text-rose-600 dark:text-rose-400">*</span>
         </label>
         <div class="relative flex items-center">
           <span class="pointer-events-none absolute left-4 text-sm font-medium text-slate-500 dark:text-slate-400">GH₵</span>
           <input id="restock_cost"
-                 type="text"
-                 readonly
-                 value="{{ product.cost }}"
-                 class="tnum w-full cursor-default rounded-lg border border-slate-200 bg-slate-100 py-2 pl-14 pr-3 text-sm font-semibold text-slate-700 focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">
+                 name="unit_cost"
+                 type="number"
+                 min="0"
+                 step="0.01"
+                 required
+                 x-model="unitCost"
+                 class="tnum w-full rounded-lg border border-slate-200 bg-slate-50 py-2 pl-14 pr-3 text-sm font-semibold text-slate-900 transition-colors placeholder:text-slate-400 focus:border-emerald-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/30 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:focus:bg-slate-900">
         </div>
+        <small class="text-[11px] text-slate-500 dark:text-slate-400"
+               x-show="num(unitCost) !== num(catalogueCost)">
+          Saves to this batch; shelf default becomes GH₵ <span class="tnum" x-text="num(unitCost).toFixed(2)">0.00</span>.
+        </small>
       </div>
       <div class="flex flex-col gap-1">
         <label class="text-xs font-semibold uppercase tracking-wide text-slate-700 dark:text-slate-200" for="restock_price">
@@ -160,8 +175,40 @@
       </div>
     </div>
     <p class="-mt-2 text-[11px] text-slate-500 dark:text-slate-400">
-      Ledger rates stay fixed on inbound shipments — change pricing from the product dialog instead.
+      The unit cost you enter is charged to this batch and becomes the default shelf cost.
+      Retail stays fixed on inbound shipments — change it from the product dialog.
     </p>
+
+    <!-- Optional purchase paperwork -->
+    <details class="rounded-lg border border-slate-200 dark:border-slate-700">
+      <summary class="cursor-pointer px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+        Purchase details (optional)
+      </summary>
+      <div class="grid gap-3 px-3 pb-3 sm:grid-cols-3">
+        <label class="flex flex-col gap-1">
+          <span class="text-xs text-slate-500 dark:text-slate-400">Purchased on</span>
+          <input name="purchased_on"
+                 type="date"
+                 class="tnum w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 transition-colors focus:border-emerald-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/30 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:focus:bg-slate-900">
+        </label>
+        <label class="flex flex-col gap-1">
+          <span class="text-xs text-slate-500 dark:text-slate-400">Supplier</span>
+          <input name="supplier_name"
+                 type="text"
+                 maxlength="255"
+                 placeholder="Who sold it to you"
+                 class="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 transition-colors placeholder:text-slate-400 focus:border-emerald-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/30 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:focus:bg-slate-900">
+        </label>
+        <label class="flex flex-col gap-1">
+          <span class="text-xs text-slate-500 dark:text-slate-400">Invoice/reference</span>
+          <input name="external_reference"
+                 type="text"
+                 maxlength="255"
+                 placeholder="INV-0000"
+                 class="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 transition-colors placeholder:text-slate-400 focus:border-emerald-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/30 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:focus:bg-slate-900">
+        </label>
+      </div>
+    </details>
 
     <!-- Calculation & ledger impact -->
     <div class="flex flex-col gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/40">

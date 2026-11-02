@@ -37,7 +37,7 @@
         hx-post="{% url 'core:update-product-stock' product.id %}"
         hx-target="#product_{{ product.id }}"
         hx-swap="outerHTML"
-        hx-on::after-request="if ($event.detail.successful) document.querySelector('#modal_root [data-modal-close]')?.click()">
+        hx-on::after-request="if (event.detail.successful) document.querySelector('#modal_root [data-modal-close]')?.click()">
     {% comment %}
       One key per dialog open, so a double click or a slow network that posts
       the same correction twice lands in the ledger as one adjustment.
@@ -46,6 +46,9 @@
       this dialog and submitting answers 404), yet after-request still fires, so
       the close is gated on the outcome: on failure the dialog stays open and
       keeps the reason and units the admin typed; the row toast path is 2xx-only.
+      The binding is htmx's own: 2.0.11 compiles hx-on handlers with
+      new Function("event", code), so the event is named event here (not the
+      Alpine-only $event).
     {% endcomment %}
     <input type="hidden" name="request_key" :value="requestKey">
     <fieldset class="grid gap-2">

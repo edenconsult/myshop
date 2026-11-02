@@ -175,7 +175,7 @@
                 {{ batch.quantity_received|intcomma }}
               </td>
               <td class="px-4 py-2 text-right align-middle">
-                <span class="tnum whitespace-nowrap text-slate-900 dark:text-slate-100">GH₵ {{ batch.unit_cost }}</span>
+                <span class="tnum whitespace-nowrap text-slate-900 dark:text-slate-100">GH₵ {{ batch.unit_cost|floatformat:2|intcomma }}</span>
                 {% if batch.cost_is_estimated %}
                   <span class="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase text-amber-700 dark:bg-amber-950/60 dark:text-amber-400">estimated</span>
                 {% endif %}

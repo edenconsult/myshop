@@ -23,6 +23,22 @@ from core.models import (
 
 
 class BatchUiTestCase(TestCase):
+    """Shared fixture and the two markup probes every task in this module uses.
+
+    Both helpers were hoisted here after the Task 4 review: ``tbody_rows`` lived
+    in ``BatchesDialogTests`` while ``ReceiptPagesTests`` reached across the class
+    to call it, and the directive-attribute probe existed twice — once scanning a
+    dialog fragment whole, once scanning a full page's ``<main>`` — with the same
+    prefix list copy-pasted between them.
+    """
+
+    # Attribute names that mean "this markup carries behaviour": Alpine's x-
+    # prefix and its @ / : shorthands, every htmx verb (hx-get, hx-target,
+    # hx-on …) and inline event handlers (onclick, onload …). The list the Task 3
+    # probe shipped with — ("x-", "hx-on", "@", ":") — was narrower than the
+    # "no inline JS" claim: a plain onclick="…" or an hx-get button passed it.
+    JS_ATTRIBUTE_PREFIXES = ("x-", "hx-", "on", "@", ":")
+
     def setUp(self):
         self.admin = Account.objects.create_user(
             username="aba", password="pw", user_type="ADMIN"
@@ -36,6 +52,94 @@ class BatchUiTestCase(TestCase):
             profit_rate=Decimal("0.50"),
         )
         self.client.force_login(self.admin)
+
+    @staticmethod
+    def tbody_rows(html):
+        """Every <tbody> row of the rendered table as a list of whitespace-collapsed cells.
+
+        Pinned through the parser instead of assertContains so a movement number
+        can only be matched against the cell it is actually rendered in.
+        """
+
+        class TbodyProbe(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.in_tbody = False
+                self.rows = []
+
+            def handle_starttag(self, tag, attrs):
+                if tag == "tbody":
+                    self.in_tbody = True
+                elif self.in_tbody and tag == "tr":
+                    self.rows.append([])
+                elif self.in_tbody and tag == "td":
+                    self.rows[-1].append("")
+
+            def handle_endtag(self, tag):
+                if tag == "tbody":
+                    self.in_tbody = False
+
+            def handle_data(self, data):
+                if self.in_tbody and self.rows and self.rows[-1]:
+                    self.rows[-1][-1] += data
+
+        probe = TbodyProbe()
+        probe.feed(html)
+        return [[" ".join(cell.split()) for cell in row] for row in probe.rows]
+
+    @classmethod
+    def js_attribute_names(cls, html, *, within_main=False):
+        """Every inline-JS marker the rendered markup carries.
+
+        A marker is a directive attribute name (see JS_ATTRIBUTE_PREFIXES) or the
+        literal ``"script"`` for a ``<script>`` element, so an inline handler, an
+        htmx verb and a page-local script all fail a "this markup is inert"
+        assertion instead of slipping past it.
+
+        ``within_main=True`` narrows the scan to ``<main id="main-content">``, i.e.
+        what a page's own block renders: templates/_base.html legitimately owns the
+        shell's Alpine scope and its own scripts outside that element. A dialog
+        fragment carries no such wrapper, so it scans whole (``within_main=False``)
+        — narrowing it to ``<main>`` would have made the probe trivially empty.
+        """
+        void = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link",
+                "meta", "param", "source", "track", "wbr"}
+
+        class DirectiveProbe(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.depth = 0  # nesting inside <main id="main-content">; 0 = outside
+                self.found = []
+
+            def visit(self, tag, attrs, self_closing=False):
+                if within_main:
+                    if not self.depth:
+                        if tag == "main" and dict(attrs).get("id") == "main-content":
+                            self.depth = 1
+                        return
+                    if not self_closing and tag not in void:
+                        self.depth += 1
+                if tag == "script":
+                    self.found.append("script")
+                self.found.extend(
+                    name
+                    for name, _ in attrs
+                    if name.startswith(cls.JS_ATTRIBUTE_PREFIXES)
+                )
+
+            def handle_starttag(self, tag, attrs):
+                self.visit(tag, attrs)
+
+            def handle_startendtag(self, tag, attrs):
+                self.visit(tag, attrs, self_closing=True)
+
+            def handle_endtag(self, tag):
+                if within_main and self.depth and tag not in void:
+                    self.depth -= 1
+
+        probe = DirectiveProbe()
+        probe.feed(html)
+        return probe.found
 
 
 class RestockDialogTests(BatchUiTestCase):
@@ -186,40 +290,6 @@ class BatchesDialogTests(BatchUiTestCase):
 
     def open_dialog(self):
         return self.client.get(reverse("core:product-batches", args=[self.product.pk]))
-
-    @staticmethod
-    def tbody_rows(html):
-        """Every <tbody> row of the dialog as a list of whitespace-collapsed cells.
-
-        Pinned through the parser instead of assertContains so a movement number
-        can only be matched against the cell it is actually rendered in.
-        """
-
-        class TbodyProbe(HTMLParser):
-            def __init__(self):
-                super().__init__()
-                self.in_tbody = False
-                self.rows = []
-
-            def handle_starttag(self, tag, attrs):
-                if tag == "tbody":
-                    self.in_tbody = True
-                elif self.in_tbody and tag == "tr":
-                    self.rows.append([])
-                elif self.in_tbody and tag == "td":
-                    self.rows[-1].append("")
-
-            def handle_endtag(self, tag):
-                if tag == "tbody":
-                    self.in_tbody = False
-
-            def handle_data(self, data):
-                if self.in_tbody and self.rows and self.rows[-1]:
-                    self.rows[-1][-1] += data
-
-        probe = TbodyProbe()
-        probe.feed(html)
-        return [[" ".join(cell.split()) for cell in row] for row in probe.rows]
 
     def test_sold_and_adjusted_totals_do_not_multiply_each_other(self):
         """2 allocations of 3 and 2 adjustments of +1 read 6 and 2 — not 12 and 4.
@@ -404,25 +474,6 @@ class BatchesDialogTests(BatchUiTestCase):
             404,
         )
 
-    @staticmethod
-    def js_attribute_names(html):
-        """Every Alpine/htmx directive attribute the rendered markup carries."""
-
-        class DirectiveProbe(HTMLParser):
-            def __init__(self):
-                super().__init__()
-                self.found = []
-
-            def handle_starttag(self, tag, attrs):
-                self.found.extend(
-                    name for name, _ in attrs
-                    if name.startswith(("x-", "hx-on", "@", ":"))
-                )
-
-        probe = DirectiveProbe()
-        probe.feed(html)
-        return probe.found
-
     def test_history_dialog_is_inert_markup(self):
         """A read-only history needs no script: no Alpine scope, no htmx handler.
 
@@ -489,15 +540,34 @@ class ReceiptPagesTests(BatchUiTestCase):
         return purchase, later
 
     def drop_cutover_receipts(self):
-        """Remove the batch-less receipt 0015_backfill_opening_stock_and_costs writes.
+        """Remove every line-free receipt the database happens to already hold.
 
-        That migration creates one cutover StockReceipt on every database — in the
-        test database, where no product has stock yet, it stays line-free. Tests
-        that need exact page arithmetic drop it (in-transaction, rolled back);
-        test_cutover_receipt_without_lines_reads_as_zero keeps it and asserts
-        what the owner sees on it.
+        Migration 0015_backfill_opening_stock_and_costs creates one cutover
+        StockReceipt on every database — in the test database, where no product
+        has stock yet, it stays line-free. Tests that need exact page arithmetic
+        drop it (in-transaction, rolled back), and the tests below that care about
+        a line-free receipt drop it before writing their own, so nothing in this
+        module reads a row another session's migration decided to create.
         """
         StockReceipt.objects.filter(batches__isnull=True).delete()
+
+    def make_batchless_receipt(self, *, reason="Cutover opening stock."):
+        """Write a receipt with no StockBatch line, the way the cutover leaves one.
+
+        Field names and nullability read off core/models.py:93-118: `source` and
+        `received_at` are the only required columns (`id` defaults to a UUID,
+        `created_at` is auto_now_add, `recorded_by` is nullable and `supplier_name`
+        / `external_reference` / `notes` / `reason` are blank CharTextFields, not
+        null), so this is the same shape migration
+        0015_backfill_opening_stock_and_costs:84-89 writes — written here, so the
+        test owns its own fixture instead of `.get()`ing precisely one of them.
+        """
+        return StockReceipt.objects.create(
+            source=StockReceiptSource.OPENING,
+            received_at=timezone.now(),
+            reason=reason,
+            notes="Created by the receipt register test.",
+        )
 
     def seed_receipts(self, total):
         """`total` one-line receipts, index 0 the newest, written through the ORM.
@@ -525,49 +595,6 @@ class ReceiptPagesTests(BatchUiTestCase):
     def open_detail(self, receipt):
         return self.client.get(reverse("core:stock-receipt-detail", args=[receipt.pk]))
 
-    @staticmethod
-    def directive_attributes_in_main(html):
-        """Alpine/htmx directive attributes of the page's own markup.
-
-        Scoped to <main id="main-content"> because the shared header
-        (templates/partials/header.html) legitimately owns an x-data scope; the
-        block under review is what this page renders inside it.
-        """
-        void = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link",
-                "meta", "param", "source", "track", "wbr"}
-
-        class MainScopeProbe(HTMLParser):
-            def __init__(self):
-                super().__init__()
-                self.depth = 0
-                self.found = []
-
-            def visit(self, tag, attrs, self_closing=False):
-                if not self.depth:
-                    if tag == "main" and dict(attrs).get("id") == "main-content":
-                        self.depth = 1
-                    return
-                if not self_closing and tag not in void:
-                    self.depth += 1
-                self.found.extend(
-                    name for name, _ in attrs
-                    if name.startswith(("x-", "hx-on", "@", ":"))
-                )
-
-            def handle_starttag(self, tag, attrs):
-                self.visit(tag, attrs)
-
-            def handle_startendtag(self, tag, attrs):
-                self.visit(tag, attrs, self_closing=True)
-
-            def handle_endtag(self, tag):
-                if self.depth and tag not in void:
-                    self.depth -= 1
-
-        probe = MainScopeProbe()
-        probe.feed(html)
-        return probe.found
-
     def test_list_is_newest_first_with_totals_and_source_badges(self):
         # the line-free cutover receipt 0015 leaves behind has its own test; this
         # one is about the arithmetic of receipts that do have lines.
@@ -587,7 +614,7 @@ class ReceiptPagesTests(BatchUiTestCase):
         self.assertContains(response, "Purchase")
         self.assertContains(response, "Noble")
         self.assertContains(response, "GH₵ 125.00")
-        rows = BatchesDialogTests.tbody_rows(response.content.decode())
+        rows = self.tbody_rows(response.content.decode())
         self.assertEqual([row[3] for row in rows], ["Purchase", "Purchase"])  # Source
         self.assertEqual([row[4] for row in rows], ["—", "Noble"])  # newest has no supplier
         self.assertEqual([row[2] for row in rows], ["—", "—"])  # purchased_on unset
@@ -599,27 +626,70 @@ class ReceiptPagesTests(BatchUiTestCase):
         )
 
     def test_cutover_receipt_without_lines_reads_as_zero(self):
-        """The line-free receipt migration 0015 writes must not render blanks.
+        """A line-free receipt reads as zeros, never as blanks.
 
-        It is a real row the owner sees: a cutover StockReceipt with no
-        StockBatch (the backfill only gives lines to products that had stock).
-        A bare Subquery annotation would put None in the units, lines and cost
-        cells and leave the detail page with an empty table and no totals.
+        The register keeps these rows (controller ruling), and the cutover state
+        that produces one is real: a StockReceipt with no StockBatch, because the
+        backfill only gives lines to products that already had stock. A bare
+        Subquery annotation would put None in the units, lines and cost cells and
+        leave the detail page with an empty table and no totals.
+
+        The row is written here instead of fetched with
+        `StockReceipt.objects.filter(batches__isnull=True).distinct().get()`. That
+        version passed only while precisely one batch-less receipt happened to
+        exist, so a change to another session's migration — make the creation
+        conditional, add lines, run it twice — errored this UI test with
+        DoesNotExist / MultipleObjectsReturned over something outside this task.
         """
-        cutover = StockReceipt.objects.filter(batches__isnull=True).distinct().get()
-        rows = BatchesDialogTests.tbody_rows(
+        self.drop_cutover_receipts()
+        cutover = self.make_batchless_receipt()
+        rows = self.tbody_rows(
             self.client.get(reverse("core:stock-receipts")).content.decode()
         )
-        self.assertEqual([row for row in rows if row[0].startswith(cutover.id.hex[:8])][0][3:8],
-                         ["Opening balance", "—", "0", "0", "GH₵ 0.00"])
+        # the single row on the page is the receipt this test wrote
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(rows[0][0].startswith(cutover.id.hex[:8]))
+        self.assertEqual(rows[0][3:8], ["Opening balance", "—", "0", "0", "GH₵ 0.00"])
         detail = self.open_detail(cutover)
         self.assertEqual(detail.status_code, 200)
         self.assertContains(detail, "This receipt has no lines.")
         self.assertContains(detail, "GH₵ 0.00")
         # one tbody row only, and it is the empty-state row, not a line row
-        self.assertEqual(len(BatchesDialogTests.tbody_rows(detail.content.decode())), 1)
+        self.assertEqual(len(self.tbody_rows(detail.content.decode())), 1)
         self.assertEqual(detail.context["remaining_total"], 0)
         self.assertEqual(detail.context["remaining_value_total"], Decimal("0.00"))
+
+    def test_several_line_free_receipts_each_read_as_zero(self):
+        """The zero reading is per row, so nothing may assume there is only one.
+
+        Paired with the test above: a fixture that *searches* for the line-free
+        row is singular by construction and breaks the day a second one exists.
+        Writing two, then reading the register, is what proves the page arithmetic
+        and the annotations hold whatever the cutover left behind.
+        """
+        self.drop_cutover_receipts()
+        receipts = [
+            self.make_batchless_receipt(reason="Cutover opening stock."),
+            self.make_batchless_receipt(reason="A second line-free receipt."),
+        ]
+        rows = self.tbody_rows(
+            self.client.get(reverse("core:stock-receipts")).content.decode()
+        )
+        # both stay visible — the register filters nothing — and each reads zero
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(
+            {row[0][:8] for row in rows}, {receipt.id.hex[:8] for receipt in receipts}
+        )
+        self.assertEqual(
+            [row[3:8] for row in rows],
+            [["Opening balance", "—", "0", "0", "GH₵ 0.00"]] * 2,
+        )
+        for receipt in receipts:
+            detail = self.open_detail(receipt)
+            self.assertEqual(detail.status_code, 200)
+            self.assertEqual(len(self.tbody_rows(detail.content.decode())), 1)
+            self.assertEqual(detail.context["remaining_total"], 0)
+            self.assertEqual(detail.context["remaining_value_total"], Decimal("0.00"))
 
     def test_list_pages_at_twenty_five_receipts(self):
         self.drop_cutover_receipts()
@@ -629,12 +699,12 @@ class ReceiptPagesTests(BatchUiTestCase):
         self.assertEqual(page.paginator.per_page, 25)
         self.assertEqual(page.paginator.num_pages, 2)
         self.assertEqual(len(page.object_list), 25)
-        self.assertEqual(len(BatchesDialogTests.tbody_rows(response.content.decode())), 25)
+        self.assertEqual(len(self.tbody_rows(response.content.decode())), 25)
         # the footer links are plain hrefs: this page carries no script at all
         self.assertContains(response, 'href="?page=2"')
         second = self.client.get(reverse("core:stock-receipts"), {"page": "2"})
         self.assertEqual(second.context["page_obj"].number, 2)
-        rows = BatchesDialogTests.tbody_rows(second.content.decode())
+        rows = self.tbody_rows(second.content.decode())
         self.assertEqual([row[4] for row in rows], ["Supplier 25"])  # the oldest one
         self.assertContains(second, "Showing rows 26–26 of 26 receipts")
         self.assertContains(second, 'href="?page=1"')
@@ -664,7 +734,7 @@ class ReceiptPagesTests(BatchUiTestCase):
         # a PURCHASE receipt never carries the flag (inventory.py:279 derives it
         # from the source), so the word must not appear on this page...
         self.assertNotContains(response, "estimated")
-        rows = BatchesDialogTests.tbody_rows(response.content.decode())
+        rows = self.tbody_rows(response.content.decode())
         self.assertEqual(rows[0][-4:], ["0", "0", "10", "GH₵ 200.00"])
         # ...while a non-purchase receipt does: same page, estimated cost and
         # the humanised source label.
@@ -677,7 +747,7 @@ class ReceiptPagesTests(BatchUiTestCase):
         detail = self.open_detail(opening)
         self.assertContains(detail, "Opening balance")
         self.assertContains(detail, "Opened the till")
-        row = BatchesDialogTests.tbody_rows(detail.content.decode())[0]
+        row = self.tbody_rows(detail.content.decode())[0]
         self.assertEqual(row[1], "Shea Repair Balm SHB01")
         self.assertEqual(row[3], "GH₵ 7.50 estimated")
         self.assertEqual(row[-4:], ["0", "0", "3", "GH₵ 22.50"])
@@ -694,7 +764,7 @@ class ReceiptPagesTests(BatchUiTestCase):
             lines=[SaleLine(self.product.pk, 4, Decimal("72.00"))],
         )
         response = self.open_detail(receipt)
-        row = BatchesDialogTests.tbody_rows(response.content.decode())[0]
+        row = self.tbody_rows(response.content.decode())[0]
         self.assertEqual(row[-4:], ["4", "0", "6", "GH₵ 120.00"])
         self.assertEqual([b.sold for b in response.context["batches"]], [4])
         self.assertEqual(response.context["remaining_total"], 6)
@@ -720,15 +790,38 @@ class ReceiptPagesTests(BatchUiTestCase):
         )
         response = self.open_detail(receipt)
         self.assertEqual([b.line_number for b in response.context["batches"]], [1, 2])
-        rows = BatchesDialogTests.tbody_rows(response.content.decode())
+        rows = self.tbody_rows(response.content.decode())
         self.assertEqual([row[0] for row in rows], ["Line 1", "Line 2"])
         self.assertEqual([row[1] for row in rows], ["Baobab Oil BOO1", "Shea Repair Balm SHB01"])
         # header card carries what the receipt was: supplier, GRN, purchase date
         self.assertContains(response, "Market Runner")
         self.assertContains(response, "GRN-11")
         self.assertContains(response, "31 Oct 2026")
+        # the same per-receipt totals annotation, read on the detail page
+        self.assertEqual(response.context["receipt"].line_count, 2)
+        self.assertEqual(response.context["receipt"].units, 9)
+        self.assertEqual(response.context["receipt"].value, Decimal("108.00"))
+        # Drop the migration's line-free row first: object_list[0] used to be this
+        # receipt only because of when 0015 happened to run (and, on an equal
+        # received_at, because of a random-UUID -id tie-break). The row is now
+        # addressed by pk, so the assertion is about this receipt, not about sort
+        # order someone else's migration can change.
+        self.drop_cutover_receipts()
         listed = self.client.get(reverse("core:stock-receipts"))
-        self.assertEqual(listed.context["page_obj"].object_list[0].line_count, 2)
+        page = listed.context["page_obj"]
+        self.assertEqual([r.pk for r in page.object_list], [receipt.pk])
+        # Money columns pinned on the suite's ONLY multi-line receipt. Every other
+        # list assertion reads one-line receipts, where even an annotation that
+        # fans out across a join still adds up right by accident. Here:
+        # 6 + 3 = 9 units, 6 x 8.00 + 3 x 20.00 = GH₵ 108.00, over 2 lines.
+        self.assertEqual(page.object_list[0].line_count, 2)
+        self.assertEqual(page.object_list[0].units, 9)
+        self.assertEqual(page.object_list[0].value, Decimal("108.00"))
+        # and the same three figures as the cell the owner reads them in
+        self.assertEqual(
+            self.tbody_rows(listed.content.decode())[0][3:8],
+            ["Purchase", "Market Runner", "2", "9", "GH₵ 108.00"],
+        )
 
     def test_unknown_receipt_is_a_404(self):
         self.assertEqual(
@@ -780,18 +873,54 @@ class ReceiptPagesTests(BatchUiTestCase):
         self.assertIn("#receipt_long", response.content.decode())
 
     def test_register_pages_are_inert_markup(self):
-        """Both pages are read-only tables: no Alpine scope, no htmx handler."""
+        """Both pages are read-only tables: no Alpine scope, no htmx verb, no script."""
         receipt = receive_stock(
             actor=self.admin, request_key=uuid.uuid4(),
             lines=[ReceiptLine(self.product.pk, 2, Decimal("3.00"))],
             received_at=timezone.now(),
         )
         self.assertEqual(
-            self.directive_attributes_in_main(
-                self.client.get(reverse("core:stock-receipts")).content.decode()
+            self.js_attribute_names(
+                self.client.get(reverse("core:stock-receipts")).content.decode(),
+                within_main=True,
             ),
             [],
         )
         self.assertEqual(
-            self.directive_attributes_in_main(self.open_detail(receipt).content.decode()), []
+            self.js_attribute_names(
+                self.open_detail(receipt).content.decode(), within_main=True
+            ),
+            [],
+        )
+
+    def test_the_inert_markup_probe_reports_every_marker_it_claims(self):
+        """A scope-based probe is only evidence when it can also return non-zero.
+
+        Pinned straight from a markup string, not from a template: the shipped
+        pages must stay JS-free, so the only way to prove the widened prefix list
+        and the <script> check actually bite — and that the <main> region is
+        really being entered rather than skipped — is to feed the probe the
+        markers it claims to catch.
+        """
+        marked = (
+            '<main id="main-content">'
+            '<button onclick="steal()">x</button>'
+            '<div hx-get="/products/receipts/" hx-target="#modal_root"></div>'
+            '<div x-data="{}" @click="go()" :class="c" hx-on:click="f()"></div>'
+            "<script>alert(1)</script>"
+            "</main>"
+            # outside the reviewed region, so deliberately not reported
+            '<div x-data="{never: true}"></div>'
+        )
+        self.assertEqual(
+            self.js_attribute_names(marked, within_main=True),
+            ["onclick", "hx-get", "hx-target", "x-data", "@click", ":class",
+             "hx-on:click", "script"],
+        )
+        # Task 3's whole-document mode is the same probe, minus the region: a
+        # dialog fragment's x-data is still reported and a data-* attribute is
+        # still not mistaken for an inline handler.
+        self.assertEqual(
+            self.js_attribute_names('<div x-data="{}" data-modal-close></div>'),
+            ["x-data"],
         )

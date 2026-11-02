@@ -47,8 +47,8 @@
   <div class="overflow-hidden rounded-xl bg-white shadow-sm ring-1 ring-slate-200/70 dark:bg-slate-900 dark:ring-slate-800">
     <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3 dark:border-slate-800">
       <span class="text-base font-semibold text-slate-900 dark:text-slate-100">Receipt Ledger</span>
+      {# the register's size only: "Page X of Y" belongs to the footer controls below #}
       <span class="tnum rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-medium uppercase tracking-wider text-slate-500 dark:bg-slate-800/60 dark:text-slate-400">
-        Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }} ·
         {{ page_obj.paginator.count|intcomma }} receipt{{ page_obj.paginator.count|pluralize }}
       </span>
     </div>

@@ -37,20 +37,33 @@
         hx-post="{% url 'core:update-product-stock' product.id %}"
         hx-target="#product_{{ product.id }}"
         hx-swap="outerHTML"
-        hx-on::after-request="if (event.detail.successful) document.querySelector('#modal_root [data-modal-close]')?.click()">
+        hx-on::after-request="var pill = document.querySelector('#product_{{ product.id }} [data-stock-error]'), line = document.querySelector('#adjust_form [data-adjust-error]'); if (event.detail.successful &amp;&amp; !pill) { document.querySelector('#modal_root [data-modal-close]')?.click(); } else if (line) { if (pill) line.textContent = pill.textContent.trim(); line.hidden = false; }">
     {% comment %}
       One key per dialog open, so a double click or a slow network that posts
       the same correction twice lands in the ledger as one adjustment.
-      The POST response is the refreshed row, not a dialog, so close on arrival.
-      htmx 2.0.11 swaps nothing on a 4xx/5xx (a batch deleted between opening
-      this dialog and submitting answers 404), yet after-request still fires, so
-      the close is gated on the outcome: on failure the dialog stays open and
-      keeps the reason and units the admin typed; the row toast path is 2xx-only.
+      The POST response is the refreshed row, not a dialog, so close on arrival
+      — but only on an arrival that actually saved. views.py answers EVERY
+      business failure of adjust_batch (stale batch, bad reason, an inventory
+      that no longer agrees with the ledger) by rendering the same row with an
+      `error` key at HTTP 200, so event.detail.successful is true for those too
+      and the row alone would hide the sentence behind this dialog. The close is
+      therefore gated on the swap NOT landing [data-stock-error] in this
+      product's row; when it did, the dialog stays open, keeping the reason and
+      units typed, and copies the pill's sentence into [data-adjust-error].
+      A real 4xx/5xx (htmx 2.0.11 swaps nothing, but after-request still fires)
+      leaves that element's own copy standing: the batch list may be stale.
       The binding is htmx's own: 2.0.11 compiles hx-on handlers with
       new Function("event", code), so the event is named event here (not the
-      Alpine-only $event).
+      Alpine-only $event), and the value carries no raw double quote.
     {% endcomment %}
     <input type="hidden" name="request_key" :value="requestKey">
+    <p data-adjust-error
+       hidden
+       role="alert"
+       class="rounded-lg bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 dark:bg-rose-950/60 dark:text-rose-400">
+      Nothing was saved, and the batch list behind this dialog may be stale.
+      Close it and open Adjust Stock Count again to load the current batches.
+    </p>
     <fieldset class="grid gap-2">
       <legend class="sr-only">Batch</legend>
       {% for batch in batches %}
@@ -58,7 +71,7 @@
           <span class="flex items-center gap-3">
             <input type="radio" name="batch_id" value="{{ batch.pk }}" {% if forloop.first %}checked{% endif %}>
             <span class="tnum">{{ batch.receipt.received_at|date:"d M Y" }} ·
-              GH₵ {{ batch.unit_cost }} <span class="text-slate-500 dark:text-slate-400">/ unit</span>
+              GH₵ {{ batch.unit_cost|floatformat:2|intcomma }} <span class="text-slate-500 dark:text-slate-400">/ unit</span>
               {% if batch.cost_is_estimated %}<span class="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase text-amber-700 dark:bg-amber-950/60 dark:text-amber-400">estimated</span>{% endif %}
             </span>
           </span>

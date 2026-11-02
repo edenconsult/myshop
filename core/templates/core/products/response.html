@@ -3,7 +3,7 @@
 {% block modal_width %}max-w-md{% endblock modal_width %}
 {% block modal_icon %}{% if type == 'success' %}{% icon 'task_alt' 'text-[24px]' %}{% else %}{% icon 'error' 'text-[24px]' %}{% endif %}{% endblock modal_icon %}
 {% block modal_title %}{% if type == 'success' %}Ledger updated{% else %}Nothing was saved{% endif %}{% endblock modal_title %}
-{% block modal_subtitle %}{% if type == 'success' %}The stock table behind this dialog already shows the change.{% else %}Fix the details in the dialog and try again.{% endif %}{% endblock modal_subtitle %}
+{% block modal_subtitle %}{% if type == 'success' %}The stock table behind this dialog already shows the change.{% else %}Reopen the stock dialog for this product and enter the details again.{% endif %}{% endblock modal_subtitle %}
 {% block modal_body %}
   <div class="flex items-start gap-3 rounded-lg {% if type == 'success' %}bg-emerald-50 dark:bg-emerald-950/40{% else %}bg-rose-50 dark:bg-rose-950/40{% endif %} px-4 py-3">
     {% if type == 'success' %}

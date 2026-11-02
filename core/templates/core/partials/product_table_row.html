@@ -59,9 +59,14 @@
         {{ product.stock|intcomma }}
       </button>
       {% if error %}
+        {# data-stock-error is the hook the Adjust Stock Count dialog reads to learn #}
+        {# that a 2xx row swap still carried a failed save; title keeps the full #}
+        {# backend sentence reachable under the truncated pill. #}
         <div role="alert"
+             data-stock-error
+             title="{{ error }}"
              x-data="" x-init="setTimeout(() => $el.remove(), 6000)"
-             class="flex items-center gap-1.5 whitespace-nowrap rounded-full bg-amber-100 px-2.5 py-0.5 text-[11px] font-semibold text-amber-800 dark:bg-amber-950/60 dark:text-amber-400">
+             class="flex max-w-xs items-center gap-1.5 truncate rounded-full bg-amber-100 px-2.5 py-0.5 text-[11px] font-semibold text-amber-800 dark:bg-amber-950/60 dark:text-amber-400">
           {% icon 'warning' 'text-[14px]' %} {{ error }}
         </div>
       {% endif %}

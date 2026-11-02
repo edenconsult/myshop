@@ -92,7 +92,7 @@
                 {{ receipt.supplier_name|default:"—" }}
               </td>
               <td class="tnum px-4 py-2 text-right align-middle">
-                {{ receipt.line_count }}
+                {{ receipt.line_count|intcomma }}
               </td>
               <td class="tnum px-4 py-2 text-right align-middle">
                 {{ receipt.units|intcomma }}

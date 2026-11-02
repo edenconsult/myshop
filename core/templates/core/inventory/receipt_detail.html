@@ -127,7 +127,7 @@
 
     <div class="flex flex-wrap items-center gap-x-6 gap-y-2 border-t border-slate-200 bg-slate-50/60 px-4 py-3 text-xs text-slate-500 dark:border-slate-800 dark:bg-slate-950/40 dark:text-slate-400">
       <span>
-        <span class="tnum font-semibold text-slate-900 dark:text-slate-100">{{ receipt.line_count }}</span>
+        <span class="tnum font-semibold text-slate-900 dark:text-slate-100">{{ receipt.line_count|intcomma }}</span>
         line{{ receipt.line_count|pluralize }}
       </span>
       <span>

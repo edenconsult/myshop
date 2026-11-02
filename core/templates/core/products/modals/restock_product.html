@@ -173,7 +173,7 @@
         </div>
         <small class="text-[11px] text-slate-500 dark:text-slate-400"
                x-show="num(unitCost) !== num(catalogueCost)">
-          Saves to this batch; shelf default becomes GH₵ <span class="tnum" x-text="num(unitCost).toFixed(2)">0.00</span>.
+          Saves to this batch; shelf default becomes GH₵ <span class="tnum" x-text="money(unitCost)">0.00</span>.
         </small>
       </div>
       <div class="flex flex-col gap-1">

@@ -1,4 +1,5 @@
 import datetime as dt
+import re
 import uuid
 from decimal import Decimal
 from html.parser import HTMLParser
@@ -23,13 +24,17 @@ from core.models import (
 
 
 class BatchUiTestCase(TestCase):
-    """Shared fixture and the two markup probes every task in this module uses.
+    """Shared fixture and the markup probes every task in this module uses.
 
     Both helpers were hoisted here after the Task 4 review: ``tbody_rows`` lived
     in ``BatchesDialogTests`` while ``ReceiptPagesTests`` reached across the class
     to call it, and the directive-attribute probe existed twice — once scanning a
     dialog fragment whole, once scanning a full page's ``<main>`` — with the same
-    prefix list copy-pasted between them.
+    prefix list copy-pasted between them. The attribute probes added for the final
+    review sit on the same rule: one parse of the rendered markup, asked by
+    attribute name, by the elements that carry a name, and by the bare numbers a
+    cell prints — because pinning a rendered string is the only way a Python test
+    can see a value the browser compiles.
     """
 
     # Attribute names that mean "this markup carries behaviour": Alpine's x-
@@ -86,6 +91,89 @@ class BatchUiTestCase(TestCase):
         probe = TbodyProbe()
         probe.feed(html)
         return [[" ".join(cell.split()) for cell in row] for row in probe.rows]
+
+    @classmethod
+    def attribute_values(cls, html, name):
+        """Every value of one attribute, read the way a browser reads it.
+
+        ``html.parser`` unescapes entities while parsing attribute values, so a
+        value pulled out here is the exact source string htmx or Alpine compiles
+        (``&amp;&amp;`` arrives as ``&&``), which is what the JS-in-attribute pins
+        depend on.
+        """
+        return [
+            value
+            for _tag, attributes in cls.elements_with_attributes(html)
+            if (value := attributes.get(name)) is not None
+        ]
+
+    @classmethod
+    def elements_with_attributes(cls, html):
+        """Every element that carries at least one attribute, as (tag, attrs) pairs.
+
+        Document order, self-closing tags included; the value dicts keep the
+        unprefixed name so a probe can ask "which element carries
+        ``data-stock-error``?" without re-parsing.
+        """
+
+        class AttributeProbe(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.found = []
+
+            def visit(self, tag, attrs):
+                attributes = dict(attrs)
+                if attributes:
+                    self.found.append((tag, attributes))
+
+            def handle_starttag(self, tag, attrs):
+                self.visit(tag, attrs)
+
+            def handle_startendtag(self, tag, attrs):
+                self.visit(tag, attrs)
+
+        probe = AttributeProbe()
+        probe.feed(html)
+        return probe.found
+
+    @classmethod
+    def elements_with_attribute(cls, html, name):
+        """The (tag, attrs) pairs of every element carrying ``name``."""
+        return [
+            (tag, attributes)
+            for tag, attributes in cls.elements_with_attributes(html)
+            if name in attributes
+        ]
+
+    @classmethod
+    def naked_number_texts(cls, html, *, tag="span"):
+        """Text of every ``tag`` whose whole content is a number ("1,000" / "1000").
+
+        Cell-shaped enough to pin a thousands separator to the element that prints
+        it, without depending on the surrounding markup's exact whitespace.
+        """
+        collector = []
+
+        class NumberProbe(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.current = None
+
+            def handle_starttag(self, element, attrs):
+                self.current = "" if element == tag and dict(attrs) else None
+
+            def handle_data(self, data):
+                if self.current is not None:
+                    self.current += data
+
+            def handle_endtag(self, element):
+                if element == tag and self.current is not None:
+                    if re.fullmatch(r"[\d,]+", text := self.current.strip()):
+                        collector.append(text)
+                    self.current = None
+
+        NumberProbe().feed(html)
+        return collector
 
     @classmethod
     def js_attribute_names(cls, html, *, within_main=False):
@@ -190,6 +278,53 @@ class RestockDialogTests(BatchUiTestCase):
             302,
         )
 
+    def test_failure_response_sends_the_owner_back_to_the_stock_dialog(self):
+        """The failure response replaces the dialog, so there is nothing to fix.
+
+        The form posts with hx-target="#modal_root" (restock_product.html:75) and
+        views.py answers a rejected shipment with core/products/response.html, so
+        the fields — and the one-per-open request key — are gone with the dialog.
+        The subtitle used to promise "Fix the details in the dialog and try
+        again", which is a lie; the success branch keeps its own copy.
+        """
+        url = reverse("core:restock-product", args=[self.product.pk])
+        failure = self.client.post(
+            url,
+            {"units": "0", "unit_cost": "20.00", "request_key": str(uuid.uuid4())},
+        )
+        self.assertContains(failure, "Nothing was saved")
+        self.assertContains(
+            failure,
+            "Reopen the stock dialog for this product and enter the details again.",
+        )
+        self.assertNotContains(failure, "Fix the details in the dialog")
+        success = self.client.post(
+            url,
+            {"units": "10", "unit_cost": "20.00", "request_key": str(uuid.uuid4())},
+        )
+        self.assertContains(
+            success, "The stock table behind this dialog already shows the change."
+        )
+
+    def test_shelf_default_hint_uses_the_dialog_money_formatter(self):
+        """The hint shared the x-data scope's money(), so it kept the separator.
+
+        ``x-text`` is Alpine, so the extracted value compiles with the $event
+        binding rather than htmx's event one — see the JS-validation note on the
+        close-gate test in AdjustDialogMarkupTests.
+        """
+        response = self.client.get(
+            reverse("core:restock-product", args=[self.product.pk])
+        )
+        hints = [
+            value
+            for value in self.attribute_values(
+                response.content.decode(), "x-text"
+            )
+            if "unitCost" in value
+        ]
+        self.assertEqual(hints, ["money(unitCost)"])
+
 
 class AdjustDialogTests(BatchUiTestCase):
     def seed_batches(self):
@@ -204,6 +339,26 @@ class AdjustDialogTests(BatchUiTestCase):
                 received_at=received_at,
             )
             received_at += dt.timedelta(hours=1)
+
+    def write_batch(self, *, received_at, units, deplete=True):
+        """One purchase receipt's batch, written off to zero unless asked not to.
+
+        Straight through the ORM (as BatchesDialogTests does): the dialogs under
+        test here are read paths, and a zeroed ``quantity_remaining`` is the state
+        a written-off batch is really left in.
+        """
+        return StockBatch.objects.create(
+            receipt=StockReceipt.objects.create(
+                source=StockReceiptSource.PURCHASE,
+                received_at=received_at,
+                recorded_by=self.admin,
+            ),
+            product=self.product,
+            line_number=1,
+            quantity_received=units,
+            quantity_remaining=0 if deplete else units,
+            unit_cost=Decimal("20.00"),
+        )
 
     def test_question_dialog_lists_open_batches_fifo(self):
         self.seed_batches()
@@ -245,6 +400,88 @@ class AdjustDialogTests(BatchUiTestCase):
         )
         self.assertContains(response, "Select a batch")
 
+    def test_row_error_pill_is_hookable_clipped_and_fully_reachable(self):
+        """The pill is the dialog's only signal that a 2xx row swap did not save.
+
+        ``data-stock-error`` is what the close gate queries, ``max-w-xs truncate``
+        is what stops a backend sentence from stretching the row inside the
+        ``overflow-x-auto`` table, and ``title`` keeps the full text reachable —
+        so all three are pinned on the one element, with role="alert" kept.
+        """
+        self.seed_batches()
+        response = self.client.post(
+            reverse("core:update-product-stock", args=[self.product.pk]),
+            {"quantity_delta": "-1", "reason": "x", "request_key": str(uuid.uuid4())},
+        )
+        pills = self.elements_with_attribute(response.content.decode(), "data-stock-error")
+        self.assertEqual(len(pills), 1)
+        tag, attributes = pills[0]
+        self.assertEqual((tag, attributes["role"]), ("div", "alert"))
+        self.assertEqual(
+            attributes["title"], "Select a batch and enter a whole-number correction."
+        )
+        classes = attributes["class"].split()
+        self.assertTrue({"max-w-xs", "truncate"} <= set(classes), classes)
+        # the old nowrap class is what stretched the row
+        self.assertNotIn("whitespace-nowrap", classes)
+
+    def test_adjust_dialog_unit_cost_is_thousands_separated(self):
+        """The batch line here printed the raw Decimal while its neighbours filter.
+
+        Same pin as test_unit_cost_is_thousands_separated holds on the history
+        dialog: DecimalField already gives the two decimals, so floatformat's job
+        is the separator, and GH₵ 1234.50 is only visible with a cost above 1,000.
+        """
+        receive_stock(
+            actor=self.admin, request_key=uuid.uuid4(),
+            lines=[ReceiptLine(self.product.pk, 3, Decimal("1234.50"))],
+            received_at=timezone.now(),
+        )
+        response = self.client.get(
+            reverse("core:adjust-stock-question", args=[self.product.pk])
+        )
+        self.assertContains(response, "GH₵ 1,234.50")
+        self.assertNotContains(response, "GH₵ 1234.50")
+
+    def test_adjust_dialog_with_only_depleted_batches_asks_for_a_restock(self):
+        """The empty state, which no test reached: quantity_remaining__gt=0."""
+        spent = self.write_batch(received_at=timezone.now(), units=10)
+        response = self.client.get(
+            reverse("core:adjust-stock-question", args=[self.product.pk])
+        )
+        self.assertEqual(list(response.context["batches"]), [])
+        self.assertContains(response, "No open batches. Restock the product first.")
+        self.assertNotContains(response, 'name="batch_id"')
+        self.assertNotContains(response, str(spent.pk))
+
+    def test_depleted_batch_is_offered_for_correction_but_stays_in_history(self):
+        """One open and one written-off batch: only the open one can be corrected.
+
+        batch_views.py:141 filters quantity_remaining__gt=0 out of this dialog,
+        while product_batches keeps every batch so the shelf count reads whole.
+        The radio value is the batch a submit would land on, so the depleted
+        batch must not appear among them — and must appear in the history.
+        """
+        # Spaced timestamps: two back-to-back timezone.now() calls can land on the
+        # same Windows clock tick, which would make the FIFO order a coin flip.
+        older = timezone.now() - dt.timedelta(days=1)
+        spent = self.write_batch(received_at=older, units=4)
+        open_batch = self.write_batch(
+            received_at=older + dt.timedelta(hours=1), units=7, deplete=False
+        )
+        adjust = self.client.get(
+            reverse("core:adjust-stock-question", args=[self.product.pk])
+        )
+        self.assertEqual([b.pk for b in adjust.context["batches"]], [open_batch.pk])
+        self.assertContains(adjust, f'value="{open_batch.pk}"')
+        self.assertNotContains(adjust, f'value="{spent.pk}"')
+        history = self.client.get(
+            reverse("core:product-batches", args=[self.product.pk])
+        )
+        self.assertEqual(
+            {b.pk for b in history.context["batches"]}, {open_batch.pk, spent.pk}
+        )
+
     def test_saleperson_blocked_from_question_dialog(self):
         self.client.force_login(self.cashier)
         response = self.client.get(
@@ -254,15 +491,19 @@ class AdjustDialogTests(BatchUiTestCase):
 
 
 class AdjustDialogMarkupTests(BatchUiTestCase):
-    def test_rendered_dialog_carries_one_parseable_x_data(self):
+    def seed_dialog(self):
+        """One open batch and the rendered Adjust Stock Count dialog for it."""
         receive_stock(
             actor=self.admin, request_key=uuid.uuid4(),
             lines=[ReceiptLine(self.product.pk, 4, Decimal("10.00"))],
             received_at=timezone.now(),
         )
-        response = self.client.get(
+        return self.client.get(
             reverse("core:adjust-stock-question", args=[self.product.pk])
         )
+
+    def test_rendered_dialog_carries_one_parseable_x_data(self):
+        response = self.seed_dialog()
         names = []
 
         class DialogDivProbe(HTMLParser):
@@ -278,28 +519,41 @@ class AdjustDialogMarkupTests(BatchUiTestCase):
 
         Task 2's round 1 shipped `$event.detail.successful`, a ReferenceError that
         broke the close on success as well as failure. The sibling test above pins
-        only the attribute NAME, so this pins the VALUE.
+        only the attribute NAME, so this pins the VALUE — and, after the final
+        review, the whole gate: HTTP 200 is what views.py answers a *failed*
+        correction with (the row renders with an `error` key), so successful alone
+        would close the dialog on a save that never happened. The value is the
+        source htmx compiles, so its quoting is pinned too.
         """
-        receive_stock(
-            actor=self.admin, request_key=uuid.uuid4(),
-            lines=[ReceiptLine(self.product.pk, 4, Decimal("10.00"))],
-            received_at=timezone.now(),
-        )
-        response = self.client.get(
-            reverse("core:adjust-stock-question", args=[self.product.pk])
-        )
-        gate = []
-
-        class GateProbe(HTMLParser):
-            def handle_starttag(self, tag, attrs):
-                for name, value in attrs:
-                    if name == "hx-on::after-request" and value is not None:
-                        gate.append(value)
-
-        GateProbe().feed(response.content.decode())
+        gate = self.attribute_values(self.seed_dialog().content.decode(), "hx-on::after-request")
         self.assertEqual(len(gate), 1, f"expected one close gate, found {len(gate)}")
         self.assertIn("event.detail.successful", gate[0])
         self.assertNotIn("$event", gate[0])
+        # the row's error pill is the second half of the condition
+        self.assertIn("data-stock-error", gate[0])
+        # and no raw double quote may end the attribute early
+        self.assertNotIn('"', gate[0])
+
+    def test_adjust_form_carries_a_hidden_failure_line(self):
+        """A dialog kept open on failure must say so inside itself.
+
+        The row pill is behind the overlay and removes itself after 6s
+        (product_table_row.html's x-init), so the owner of a kept-open dialog
+        would otherwise see nothing at all. The line ships hidden, holds the
+        generic stale-list copy in the markup (no JS string literal to quote), and
+        is named by the very handler that reveals it.
+        """
+        html = self.seed_dialog().content.decode()
+        lines = self.elements_with_attribute(html, "data-adjust-error")
+        self.assertEqual(len(lines), 1)
+        tag, attributes = lines[0]
+        self.assertEqual((tag, attributes["role"]), ("p", "alert"))
+        self.assertIn("hidden", attributes)
+        # the generic copy is markup, not a JS string literal
+        self.assertIn("stale", " ".join(html.split()))
+        # the gate reveals this element, so the two are wired to each other
+        gate = self.attribute_values(html, "hx-on::after-request")[0]
+        self.assertIn("[data-adjust-error]", gate)
 
 
 class BatchesDialogTests(BatchUiTestCase):
@@ -438,6 +692,14 @@ class BatchesDialogTests(BatchUiTestCase):
         )
 
     def test_reconciliation_line_flags_a_shelf_that_disagrees(self):
+        """The drift is stated with its consequence, and names no affordance.
+
+        _assert_product_stock (inventory.py:159-169) runs on every receive_stock
+        and every adjust_batch, so in exactly this state BOTH the restock dialog
+        and Adjust Stock Count answer with "Inventory is inconsistent …reconcile
+        it before writing." Pointing at either one was a promise the backend
+        refuses; the footer now says what is blocked and nothing more.
+        """
         batch = self.receive(10, "20.00", received_at=timezone.now())
         # A pre-tracking sale leaves 7 in the batch against 10 on the shelf;
         # Product.save() forbids touching stock by hand, so drift is written
@@ -451,22 +713,34 @@ class BatchesDialogTests(BatchUiTestCase):
         self.assertContains(response, "Sum of batches")
         self.assertContains(
             response,
-            "out of balance, use Adjust Stock Count from the Current stock column",
+            "out of balance; restocks and stock adjustments for this product are "
+            "blocked until the counts agree",
         )
+        for promise in (
+            "use Adjust Stock Count",
+            "restock to open a batch",
+            "run reconciliation",
+        ):
+            self.assertNotContains(response, promise)
 
-    def test_drift_with_no_open_batch_points_at_restock_not_adjust(self):
-        """Adjust Stock Count only corrects onto an OPEN batch, so with every
-        batch depleted the footer must name the restock dialog instead.
+    def test_drift_with_no_open_batch_carries_the_same_blocking_copy(self):
+        """Repurposed from Task 3's restock-vs-adjust branch of the footer.
+
+        That branch pointed at an affordance per state and needed
+        ``has_open_batches`` in the context; both dialogs are blocked in the
+        drift state, so the footer says one sentence for both and the context key
+        is gone with the branch.
         """
         batch = self.receive(10, "20.00", received_at=timezone.now())
         batch.quantity_remaining = 0
         batch.save(update_fields=["quantity_remaining"])
         response = self.open_dialog()
-        self.assertFalse(response.context["has_open_batches"])
         self.assertEqual(response.context["remaining_total"], 0)
+        self.assertNotIn("has_open_batches", response.context)
         self.assertContains(
             response,
-            "out of balance, restock to open a batch that can hold them",
+            "out of balance; restocks and stock adjustments for this product are "
+            "blocked until the counts agree",
         )
         self.assertNotContains(response, "Adjust Stock Count")
 
@@ -555,6 +829,10 @@ class BatchesDialogTests(BatchUiTestCase):
                 if tag == "button":
                     attributes = dict(attrs)
                     if attributes.get("title") == "Batch history":
+                        # class is dropped, not compared: pinning it here meant
+                        # comparing the value to itself, and styling is the row's
+                        # own idiom, already held by the sibling buttons.
+                        attributes.pop("class", None)
                         self.triggers.append(attributes)
 
         probe = TriggerProbe()
@@ -568,7 +846,6 @@ class BatchesDialogTests(BatchUiTestCase):
                 "hx-get": reverse("core:product-batches", args=[self.product.pk]),
                 "hx-target": "#modal_root",
                 "hx-swap": "innerHTML",
-                "class": probe.triggers[0]["class"],  # styling is the row's own idiom
             },
         )
         self.assertIn("#sell", body)  # the local sprite symbol the button draws
@@ -746,6 +1023,44 @@ class ReceiptPagesTests(BatchUiTestCase):
             self.assertEqual(detail.context["remaining_total"], 0)
             self.assertEqual(detail.context["remaining_value_total"], Decimal("0.00"))
 
+    def test_line_count_is_thousands_separated_on_both_pages(self):
+        """intcomma only shows its work past 999, so this receipt has 1,000 lines.
+
+        The Lines cell was the one count printed raw while every neighbour around
+        it was filtered; a fixture under 1,000 lines cannot tell the two readings
+        apart, so the receipt is written wide (and straight through the ORM — the
+        register is a read path, and receive_stock would rebuild 1,000 rows to
+        reach the same state).
+        """
+        self.drop_cutover_receipts()
+        receipt = StockReceipt.objects.create(
+            source=StockReceiptSource.PURCHASE,
+            received_at=timezone.now(),
+            recorded_by=self.admin,
+        )
+        StockBatch.objects.bulk_create(
+            [
+                StockBatch(
+                    receipt=receipt,
+                    product=self.product,
+                    line_number=line,
+                    quantity_received=1,
+                    quantity_remaining=1,
+                    unit_cost=Decimal("1.00"),
+                )
+                for line in range(1, 1001)
+            ]
+        )
+        rows = self.tbody_rows(
+            self.client.get(reverse("core:stock-receipts")).content.decode()
+        )
+        self.assertEqual(rows[0][5], "1,000")  # Lines
+        self.assertEqual(rows[0][6], "1,000")  # Units
+        # the same figure in the detail page's footer, and no unfiltered twin
+        numbers = self.naked_number_texts(self.open_detail(receipt).content.decode())
+        self.assertIn("1,000", numbers)
+        self.assertNotIn("1000", numbers)
+
     def test_list_pages_at_twenty_five_receipts(self):
         self.drop_cutover_receipts()
         self.seed_receipts(26)
@@ -769,6 +1084,15 @@ class ReceiptPagesTests(BatchUiTestCase):
         oversized = self.client.get(reverse("core:stock-receipts"), {"page": "99"})
         self.assertEqual(oversized.status_code, 200)
         self.assertEqual(oversized.context["page_obj"].number, 2)
+        # …but get_page's EmptyPage arm sends a number below 1 to the LAST page,
+        # which for the register is its oldest receipts; the view normalises that
+        # to page 1, the same place junk lands.
+        for value in ("0", "-3"):
+            with self.subTest(page=value):
+                moved = self.client.get(reverse("core:stock-receipts"), {"page": value})
+                self.assertEqual(moved.status_code, 200)
+                self.assertEqual(moved.context["page_obj"].number, 1)
+                self.assertEqual(len(moved.context["page_obj"].object_list), 25)
 
     def test_list_without_receipts_says_so(self):
         self.drop_cutover_receipts()

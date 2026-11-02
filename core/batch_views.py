@@ -162,8 +162,6 @@ def product_batches(request, product_id):
     )
     # Every batch counts, depleted ones included: the reconciliation line only
     # means something against the full history the backend keeps.
-    # Adjust Stock Count can only correct onto an OPEN batch, so when the drift
-    # has no open batch to land on, the footer must not point at it.
     return render(
         request,
         "core/inventory/product_batches.html",
@@ -171,7 +169,6 @@ def product_batches(request, product_id):
             "product": product,
             "batches": batches,
             "remaining_total": sum(b.quantity_remaining for b in batches),
-            "has_open_batches": any(b.quantity_remaining > 0 for b in batches),
         },
     )
 
@@ -186,7 +183,17 @@ def stock_receipts(request):
         .annotate(**_receipt_totals())
         .order_by("-received_at", "-id")
     )
-    page = Paginator(receipts, 25).get_page(request.GET.get("page"))
+    # get_page() maps a non-integer to page 1 but an EmptyPage to the LAST page,
+    # so ?page=0 or ?page=-3 would silently open the oldest page of the register.
+    # Anything below 1 is normalised here; junk and far-out numbers keep the
+    # clamping behaviour the tests pin (page 1 and the last page).
+    requested_page = request.GET.get("page")
+    try:
+        if int(requested_page) < 1:
+            requested_page = "1"
+    except (TypeError, ValueError):
+        pass
+    page = Paginator(receipts, 25).get_page(requested_page)
     return render(request, "core/inventory/receipts.html", {"page_obj": page})
 
 

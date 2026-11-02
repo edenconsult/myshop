@@ -273,6 +273,34 @@ class AdjustDialogMarkupTests(BatchUiTestCase):
         DialogDivProbe().feed(response.content.decode())
         self.assertEqual(names, ["class", "x-data"])
 
+    def test_close_gate_names_htmx_event_not_alpine_dollar_event(self):
+        """htmx binds an hx-on handler's parameter as `event`; Alpine uses `$event`.
+
+        Task 2's round 1 shipped `$event.detail.successful`, a ReferenceError that
+        broke the close on success as well as failure. The sibling test above pins
+        only the attribute NAME, so this pins the VALUE.
+        """
+        receive_stock(
+            actor=self.admin, request_key=uuid.uuid4(),
+            lines=[ReceiptLine(self.product.pk, 4, Decimal("10.00"))],
+            received_at=timezone.now(),
+        )
+        response = self.client.get(
+            reverse("core:adjust-stock-question", args=[self.product.pk])
+        )
+        gate = []
+
+        class GateProbe(HTMLParser):
+            def handle_starttag(self, tag, attrs):
+                for name, value in attrs:
+                    if name == "hx-on::after-request" and value is not None:
+                        gate.append(value)
+
+        GateProbe().feed(response.content.decode())
+        self.assertEqual(len(gate), 1, f"expected one close gate, found {len(gate)}")
+        self.assertIn("event.detail.successful", gate[0])
+        self.assertNotIn("$event", gate[0])
+
 
 class BatchesDialogTests(BatchUiTestCase):
     """Task 3 — the read-only per-product batch history dialog."""
@@ -355,6 +383,17 @@ class BatchesDialogTests(BatchUiTestCase):
                          ["10", "0", "0", "10"])
         self.assertContains(response, "GH₵ 20.00")
 
+    def test_unit_cost_is_thousands_separated(self):
+        """A GH₵ 1,234.50 batch must not print the raw 'GH₵ 1234.50'.
+
+        DecimalField already yields two decimals, so floatformat's job here is
+        the separator — the same pin ReceiptPagesTests holds on register cells.
+        """
+        self.receive(3, "1234.50", received_at=timezone.now())
+        response = self.open_dialog()
+        self.assertEqual(self.tbody_rows(response.content.decode())[0][1],
+                         "GH₵ 1,234.50")
+
     def test_sold_is_read_per_batch_not_per_product(self):
         """A 5-unit FIFO sale split 4 + 1 across two batches must not read 5 + 5.
 
@@ -414,6 +453,22 @@ class BatchesDialogTests(BatchUiTestCase):
             response,
             "out of balance, use Adjust Stock Count from the Current stock column",
         )
+
+    def test_drift_with_no_open_batch_points_at_restock_not_adjust(self):
+        """Adjust Stock Count only corrects onto an OPEN batch, so with every
+        batch depleted the footer must name the restock dialog instead.
+        """
+        batch = self.receive(10, "20.00", received_at=timezone.now())
+        batch.quantity_remaining = 0
+        batch.save(update_fields=["quantity_remaining"])
+        response = self.open_dialog()
+        self.assertFalse(response.context["has_open_batches"])
+        self.assertEqual(response.context["remaining_total"], 0)
+        self.assertContains(
+            response,
+            "out of balance, restock to open a batch that can hold them",
+        )
+        self.assertNotContains(response, "Adjust Stock Count")
 
     def test_balanced_shelf_does_not_claim_to_be_out_of_balance(self):
         self.receive(10, "20.00", received_at=timezone.now())

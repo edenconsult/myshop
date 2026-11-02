@@ -162,6 +162,8 @@ def product_batches(request, product_id):
     )
     # Every batch counts, depleted ones included: the reconciliation line only
     # means something against the full history the backend keeps.
+    # Adjust Stock Count can only correct onto an OPEN batch, so when the drift
+    # has no open batch to land on, the footer must not point at it.
     return render(
         request,
         "core/inventory/product_batches.html",
@@ -169,6 +171,7 @@ def product_batches(request, product_id):
             "product": product,
             "batches": batches,
             "remaining_total": sum(b.quantity_remaining for b in batches),
+            "has_open_batches": any(b.quantity_remaining > 0 for b in batches),
         },
     )
 

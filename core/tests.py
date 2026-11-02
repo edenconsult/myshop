@@ -1003,6 +1003,7 @@ RECEIPT_COMPANY = {
     "phone": "+233 24 833 1063",
     "email": "orders@noble.example",
     "footer": "Goods sold are not returnable. Thank you for your patronage!",
+    "developer": "Eden",
 }
 
 
@@ -1061,14 +1062,18 @@ class ThermalReceiptTests(LedgerTestCase):
     @override_settings(COMPANY_INFO=RECEIPT_COMPANY)
     def test_sheet_length_clamps_and_grows_per_wrapped_line(self):
         empty = self.make_order("RSL00", self.admin, [])
-        one = self.make_order("RSL01", self.admin, [(self.elixir, 1)])
-        two = self.make_order("RSL02", self.admin, [(self.elixir, 1), (self.lipstick, 1)])
+        small = self.make_order("RSL01", self.admin, [(self.elixir, 1)])
+        base = self.make_order("RSL02", self.admin, [(self.elixir, 1)] * 8)
+        taller = self.make_order("RSL03", self.admin, [(self.elixir, 1)] * 9)
 
         # both fixture names fit the Item column on one line
         self.assertEqual(receipt_sheet_length_mm(empty, RECEIPT_COMPANY), 80.0)
+        self.assertEqual(
+            receipt_sheet_length_mm(small, RECEIPT_COMPANY), 80.0
+        )  # furniture alone is under the shortest printable sheet
         self.assertAlmostEqual(
-            receipt_sheet_length_mm(two, RECEIPT_COMPANY) - receipt_sheet_length_mm(one, RECEIPT_COMPANY),
-            5.4,
+            receipt_sheet_length_mm(taller, RECEIPT_COMPANY) - receipt_sheet_length_mm(base, RECEIPT_COMPANY),
+            4.9,
         )
 
     @override_settings(COMPANY_INFO=RECEIPT_COMPANY)
@@ -1186,6 +1191,54 @@ class PosCheckoutTests(LedgerTestCase):
         self.assertNotIn("today-takings", body)
 
 
+class PosSettlementMarkerTests(LedgerTestCase):
+    """The register decides what a response means from one marker, because the
+    two outcomes need opposite handling: a booked sale empties the cart, a
+    refused one must keep it so the quantity can be corrected."""
+
+    def post_cart(self, cart):
+        return self.client.post(
+            reverse("core:make-order"), {"items": json.dumps(cart)}
+        )
+
+    def test_a_booked_sale_is_marked_settled(self):
+        response = self.post_cart(
+            [{"id": str(self.lipstick.pk), "qty": 1, "total_price": "105.00"}]
+        )
+
+        self.assertIn('data-sale-result="settled"', response.content.decode())
+
+    def test_a_refused_cart_is_marked_rejected(self):
+        refusals = (
+            [],
+            [{"id": str(self.elixir.pk), "qty": 99, "total_price": "13860.00"}],
+        )
+        for cart in refusals:
+            with self.subTest(cart=cart):
+                body = self.post_cart(cart).content.decode()
+                self.assertIn('data-sale-result="rejected"', body)
+                self.assertNotIn('data-sale-result="settled"', body)
+
+
+class PosSettlementPanelTests(LedgerTestCase):
+    """The receipt is swapped into its own container instead of over the cart,
+    so the cart's live markup survives a sale and the next pick starts a fresh
+    list rather than appending to the one that was just paid for."""
+
+    def test_the_register_keeps_the_cart_and_the_receipt_apart(self):
+        response = self.client.get(reverse("core:orders-products"))
+
+        self.assertTemplateUsed(response, "core/orders/pos_register.html")
+        body = response.content.decode()
+        self.assertIn('id="cart"', body)
+        self.assertIn('id="sale-result"', body)
+        self.assertIn("target: '#sale-result'", body)
+        # the parser lowercases attribute names, so a camelCase event spelled in
+        # markup can never match what htmx dispatches; kebab-case is the only
+        # spelling that reaches the register after the receipt swaps in
+        self.assertIn("@htmx:after-swap=", body)
+
+
 class CashierRegisterAccessTests(LedgerTestCase):
     """A cashier is handed the owner's register and nothing else in the hub.
 
@@ -1239,7 +1292,7 @@ class CashierRegisterAccessTests(LedgerTestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertTemplateUsed(response, "core/index.html")
-        self.assertNotTemplateUsed(response, "core/orders/pos_register.html")
+        self.assertTemplateNotUsed(response, "core/orders/pos_register.html")
 
     def test_a_cashier_reaches_every_endpoint_the_register_needs(self):
         self.login_as_cashier()
@@ -1288,10 +1341,20 @@ class CashierRegisterAccessTests(LedgerTestCase):
             reverse("core:sales-report-pdf"),
             reverse("auth:accounts"),
         ):
-            for method in ("get", "post"):
-                with self.subTest(url=url, method=method):
-                    response = getattr(self.client, method)(url)
-                    self.assertEqual(response.status_code, 302)
+            with self.subTest(url=url):
+                self.assertEqual(self.client.get(url).status_code, 302)
+
+    def test_a_cashier_cannot_post_to_an_owner_only_action(self):
+        self.login_as_cashier()
+
+        for url in (
+            reverse("core:add-product"),
+            reverse("core:do-import-products"),
+            reverse("core:do-remove-products"),
+            reverse("auth:accounts"),
+        ):
+            with self.subTest(url=url):
+                self.assertEqual(self.client.post(url).status_code, 302)
 
     def test_the_tabbed_orders_shell_stays_closed_to_a_cashier(self):
         """The cashier gets the register at /, not the screen whose tabs also
@@ -1311,9 +1374,9 @@ class CashierTakingsTests(LedgerTestCase):
         self.rep = Account.objects.create_user(
             username="ama", password="pw", user_type="SALEPERSON"
         )
-        self.make_order("MINE0001", self.rep, [(self.lipstick, 1)])  # 105.00
-        self.make_order("MINE0002", self.rep, [(self.lipstick, 1)])  # 105.00
-        self.make_order("OTHER001", self.admin, [(self.elixir, 1)])  # 140.00
+        self.make_order("MINE01", self.rep, [(self.lipstick, 1)])  # 105.00
+        self.make_order("MINE02", self.rep, [(self.lipstick, 1)])  # 105.00
+        self.make_order("OTHR01", self.admin, [(self.elixir, 1)])  # 140.00
 
     def test_a_cashier_reads_only_their_own_takings(self):
         self.client.force_login(self.rep)
@@ -1380,7 +1443,7 @@ class CashierReceiptTests(LedgerTestCase):
         self.assertContains(response, self.receipt_urls(order.id)[1])
 
     def test_a_cashier_opens_their_own_receipt(self):
-        mine = self.make_order("MINE0001", self.rep, [(self.elixir, 1)])
+        mine = self.make_order("MINE01", self.rep, [(self.elixir, 1)])
         self.client.force_login(self.rep)
 
         for url in self.receipt_urls(mine.id):
@@ -1388,7 +1451,7 @@ class CashierReceiptTests(LedgerTestCase):
                 self.assertEqual(self.client.get(url).status_code, 200)
 
     def test_a_cashier_cannot_open_another_cashiers_receipt(self):
-        theirs = self.make_order("THEIRS01", self.other_rep, [(self.elixir, 1)])
+        theirs = self.make_order("THR01", self.other_rep, [(self.elixir, 1)])
         self.client.force_login(self.rep)
 
         for url in self.receipt_urls(theirs.id):
@@ -1396,7 +1459,7 @@ class CashierReceiptTests(LedgerTestCase):
                 self.assertEqual(self.client.get(url).status_code, 404)
 
     def test_a_cashier_cannot_open_the_owner_s_receipt(self):
-        boss_order = self.make_order("BOSS0001", self.admin, [(self.elixir, 1)])
+        boss_order = self.make_order("BOSS01", self.admin, [(self.elixir, 1)])
         self.client.force_login(self.rep)
 
         for url in self.receipt_urls(boss_order.id):
@@ -1404,7 +1467,7 @@ class CashierReceiptTests(LedgerTestCase):
                 self.assertEqual(self.client.get(url).status_code, 404)
 
     def test_the_owner_opens_any_receipt(self):
-        theirs = self.make_order("THEIRS02", self.other_rep, [(self.elixir, 1)])
+        theirs = self.make_order("THR02", self.other_rep, [(self.elixir, 1)])
 
         for url in self.receipt_urls(theirs.id):
             with self.subTest(url=url):

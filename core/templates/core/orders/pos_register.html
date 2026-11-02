@@ -9,6 +9,10 @@
        subtotal() { return this.money(this.items.reduce((sum, i) => sum + i.price * i.qty, 0)) },
        units() { return this.items.reduce((sum, i) => sum + i.qty, 0) },
        add_to_card(id, name, stock, price) {
+         // A pick after a booked sale starts the next list; after a refusal it
+         // just brings the cart back out from under the alert.
+         this.settled = false;
+         this.rejected = false;
          const picked = this.items.find(i => i.id === id);
          if (picked) { if (picked.qty < stock) picked.qty += 1; return }
          this.items.push({ id, name, stock, qty: 1, price });
@@ -20,9 +24,19 @@
          this.items = [];
          this.cart_view = false;
          this.settled = false;
+         this.rejected = false;
        },
        cart_view: false,
        settled: false,
+       rejected: false,
+       read_sale_result(panel) {
+         this.settled = panel.dataset.saleResult === 'settled';
+         this.rejected = !this.settled;
+         if (this.settled) {
+           this.items = [];
+           this.show_cart();
+         }
+       },
        show_cart() {
          // The catalog lazy-loads below the fold, so scrolling to the cart would
          // keep receding; hiding the grid brings it to the top instead.
@@ -41,11 +55,9 @@
            id: i.id, name: i.name, stock: i.stock, qty: i.qty, price: i.price,
            total_price: this.money(i.price * i.qty),
          }));
-         htmx.ajax('POST', this.order_url, { target: '#cart', swap: 'innerHTML', values: { items: JSON.stringify(cart) } })
-           .then(() => {
-             this.settled = true;
-             this.show_cart();
-           });
+         // The receipt lands in its own container: the cart's live markup stays
+         // in the page, so the next pick renders into it without a refetch.
+         htmx.ajax('POST', this.order_url, { target: '#sale-result', swap: 'innerHTML', values: { items: JSON.stringify(cart) } });
        }
      }">
 
@@ -60,7 +72,7 @@
       <span class="hidden h-5 w-px bg-slate-200 dark:bg-slate-800 sm:block" aria-hidden="true"></span>
       <span class="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
         {% icon 'payments' 'text-[16px] text-emerald-600 dark:text-emerald-400' %}
-        <span>{{ takings_label }}:</span>
+        <span>{% if personal_takings %}Your Takings{% else %}Today's Takings{% endif %}:</span>
         <strong id="today-takings" class="tnum text-sm font-semibold text-slate-900 dark:text-slate-100">GH₵ {{ today_takings|floatformat:2|intcomma }}</strong>
       </span>
       <span class="hidden h-5 w-px bg-slate-200 dark:bg-slate-800 sm:block" aria-hidden="true"></span>
@@ -83,7 +95,7 @@
 
     {# ===== Left: catalog search + quick-pick grid ===== #}
     <section class="flex-col gap-3 lg:flex lg:col-span-7 xl:col-span-8"
-             :class="cart_view && items.length > 0 ? 'hidden' : 'flex'"
+             :class="cart_view ? 'hidden' : 'flex'"
              aria-label="Product catalog">
       <div class="rounded-xl border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-800 dark:bg-slate-900">
         <label class="sr-only" for="table-search">Search products</label>
@@ -115,12 +127,20 @@
 
     {# ===== Right: live cart & settlement console ===== #}
     <aside class="lg:sticky lg:top-20 lg:col-span-5 xl:col-span-4" aria-label="Customer cart">
-      <div id="cart">{% include "core/orders/pos_cart_panel.html" %}</div>
+      <div id="sale-result"
+           x-show="settled || rejected"
+           x-cloak
+           {# kebab-case only: the parser lowercases attribute names, so a camelCase #}
+           {# event here can never match what htmx dispatches #}
+           @htmx:after-swap="read_sale_result($el.firstElementChild)"></div>
+      <div id="cart" x-show="!settled">{% include "core/orders/pos_cart_panel.html" %}</div>
     </aside>
   </div>
 
   {# ---------- Mobile cart bar: the panel below the grid is off-screen on phones ---------- #}
-  <div x-show="items.length > 0"
+  {# Stays up for a settled or refused sale too: with an emptied cart this bar is the #}
+  {# only way back to the catalog. #}
+  <div x-show="items.length > 0 || cart_view"
        x-cloak
        class="fixed inset-x-0 bottom-0 z-40 border-t border-slate-200 bg-white/95 px-3 py-2.5 backdrop-blur-md shadow-[0_-4px_20px_rgba(15,23,42,0.08)] transition-transform lg:hidden dark:border-slate-800 dark:bg-slate-900/95"
        style="padding-bottom: max(0.625rem, env(safe-area-inset-bottom))">

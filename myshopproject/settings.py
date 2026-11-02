@@ -183,4 +183,5 @@ COMPANY_INFO = {
     "phone": env("COMPANY_PHONE", default="+233 24 833 1063"),
     "email": env("COMPANY_EMAIL", default=""),
     "footer": env("COMPANY_FOOTER", default="Goods sold are not returnable. Thank you for your patronage!"),
+    "developer": env("COMPANY_DEVELOPER", default="Eden"),
 }

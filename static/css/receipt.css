@@ -10,7 +10,7 @@
 
 body {
   font-family: "Courier New", monospace;
-  font-size: 9pt;
+  font-size: 8pt;
   line-height: 1.35;
   color: #000;
   background: none;
@@ -18,13 +18,18 @@ body {
 
 .receipt-head {
   text-align: center;
+  font-size: 7pt;
 }
 
 .receipt-head .shop {
-  font-size: 12.5pt;
+  font-size: 9.5pt;
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+}
+
+.meta {
+  font-size: 7.5pt;
 }
 
 .rule {
@@ -39,24 +44,25 @@ table.lines {
   border-collapse: collapse;
 }
 
-/* Courier New 9pt chars are ~1.9mm wide: the budgets below are set to the
-   column widths, so amounts stay on one line. */
+/* Courier New 8pt chars are ~1.7mm wide: the budgets below total 73.5mm,
+   which fits the 74mm between the page margins, so every column — Amount
+   included — stays on the paper. */
 table.lines col.item {
-  width: 52mm;
+  width: 40mm;
 }
 
 table.lines col.q {
-  width: 6mm;
+  width: 6.5mm;
   text-align: right;
 }
 
 table.lines col.u {
-  width: 13mm;
+  width: 11.5mm;
   text-align: right;
 }
 
 table.lines col.a {
-  width: 17mm;
+  width: 15.5mm;
   text-align: right;
 }
 
@@ -84,5 +90,21 @@ table.lines tfoot td {
 .foot {
   margin-top: 2.5mm;
   text-align: center;
-  font-size: 8pt;
+  font-size: 7.5pt;
+}
+
+/* Small logo and developer credit sit nearest the paper's cut edge. */
+.colophon {
+  margin-top: 3mm;
+  text-align: center;
+  font-size: 6.5pt;
+}
+
+.colophon .logo {
+  width: 14mm;
+  height: auto;
+}
+
+.colophon .dev {
+  margin-top: 1mm;
 }

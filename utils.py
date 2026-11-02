@@ -4,6 +4,7 @@ import pdfkit
 from django.template import loader
 from weasyprint import HTML, CSS
 
+import base64
 import json
 import logging
 from pathlib import Path
@@ -18,15 +19,15 @@ logger = logging.getLogger(__name__)
 PRINT_STYLESHEETS = ("src/output.css", "css/print.css")
 
 
-def _resolve_stylesheet(sheet):
-    """Absolute filesystem path for a stylesheet, or None if it is missing.
+def _resolve_static(sheet):
+    """Absolute filesystem path for a static-relative file, or None if missing.
 
     Static-relative names are looked up in the collected tree first (that is
     what a deployment serves), then through the finders so a development
     checkout without collectstatic still resolves them.
 
-    WeasyPrint deliberately reads from disk rather than following a stylesheet
-    URL: a URL would make the view request its own server, which only works
+    WeasyPrint deliberately reads from disk rather than following a URL: a
+    URL would make the view request its own server, which only works
     while a dev server happens to be listening on that port and blocks a
     single-worker deployment.
     """
@@ -40,6 +41,25 @@ def _resolve_stylesheet(sheet):
 
     found = finders.find(sheet)
     return Path(found) if found else None
+
+
+def static_image_data_uri(relative_path):
+    """A static image inlined as a data: URL, or None if it is missing.
+
+    Printed documents cannot fetch /static/ URLs for the same reason they
+    cannot fetch stylesheets, so the receipt embeds its logo this way.
+    """
+    path = _resolve_static(relative_path)
+    if path is None:
+        logger.warning("Static image %r not found; prints omit it.", relative_path)
+        return None
+    mime = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg"}.get(
+        path.suffix.lower()
+    )
+    if mime is None:
+        logger.warning("Static image %r has an unsupported type.", relative_path)
+        return None
+    return f"data:{mime};base64,{base64.b64encode(path.read_bytes()).decode()}"
 
 
 def get_uuid(id):
@@ -100,7 +120,7 @@ def render_attached_pdf(relative_template_path, context, file_name, css=None, pa
 
     stylesheets = []
     for sheet in (*PRINT_STYLESHEETS, *(css or [])):
-        path = _resolve_stylesheet(sheet)
+        path = _resolve_static(sheet)
         if path is None:
             logger.warning(
                 "Print stylesheet %r not found; %s will render without it.",

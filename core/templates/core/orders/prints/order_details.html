@@ -15,12 +15,14 @@
 
     <hr class="rule">
 
-    <div>Receipt No.: {{ order.code }}</div>
-    <div>Date: {{ order.created|date:"d/m/Y H:i" }}</div>
-    <div>Served by: {{ order.user.full_name }}</div>
-    {% if order.customer_name %}
-      <div>Customer: {{ order.customer_name }}</div>
-    {% endif %}
+    <div class="meta">
+      <div>Receipt No.: {{ order.code }}</div>
+      <div>Date: {{ order.created|date:"d/m/Y H:i" }}</div>
+      <div>Served by: {{ order.user.full_name }}</div>
+      {% if order.customer_name %}
+        <div>Customer: {{ order.customer_name }}</div>
+      {% endif %}
+    </div>
 
     <hr class="rule">
 
@@ -64,5 +66,16 @@
     {% if company.footer %}
       <div class="foot">{{ company.footer }}</div>
     {% endif %}
+
+    <div class="colophon">
+      {% if logo_data_uri %}
+        <img class="logo" src="{{ logo_data_uri }}" alt="">
+      {% endif %}
+      <div>Tel: {{ company.phone }}</div>
+      {% if company.email %}
+        <div>Email: {{ company.email }}</div>
+      {% endif %}
+      <div class="dev">Developed by: {{ company.developer }}</div>
+    </div>
   </body>
 </html>

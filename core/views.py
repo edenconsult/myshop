@@ -18,7 +18,14 @@ from decimal import Decimal
 
 from authapp.models import Account
 from .models import Product, ProductCategory, Order, OrderItem
-from utils import can_ring_up, generate_code, is_admin, parse_cart, render_attached_pdf
+from utils import (
+    can_ring_up,
+    generate_code,
+    is_admin,
+    parse_cart,
+    render_attached_pdf,
+    static_image_data_uri,
+)
 import io
 import logging
 from .tasks import (
@@ -928,7 +935,7 @@ def register_context(request):
     return {
         "page_obj": page_obj,
         "today_takings": todays_takings(cashier),
-        "takings_label": "Today's Takings" if cashier is None else "Your Takings",
+        "personal_takings": cashier is not None,
     }
 
 
@@ -1214,16 +1221,20 @@ def view_order(request, order_id, order_number):
     return render(request, "core/orders/order_details.html", context)
 
 
-def receipt_sheet_length_mm(order, company):
+RECEIPT_LOGO = "images/eden-logo.png"
+RECEIPT_LOGO_HEIGHT_MM = 24.0  # 14mm logo plus its contact and credit lines
+
+
+def receipt_sheet_length_mm(order, company, logo_mm=0.0):
     """WeasyPrint refuses content-sized pages, so size the 80mm sheet by hand.
-    The 74mm base is measured (binary-searched minimum one-page height of the
-    probe receipts: furniture, rules, footer), plus 5.4mm per wrapped text
-    line — a 4.6mm 9pt line with row padding — and a line each for the
-    optional email and customer rows."""
+    The 60mm base is the measured furniture (head, meta, rules, footer) plus a
+    ~1mm margin, then 4.9mm per wrapped text line — a 3.9mm 8pt line with row
+    padding — plus the colophon allowance the caller passes, and a line each
+    for the optional email and customer rows."""
     items = order.orderitem_set.select_related("product")
-    name_lines = sum(max(1, math.ceil(len(i.product.name) / 26)) for i in items)
+    name_lines = sum(max(1, math.ceil(len(i.product.name) / 22)) for i in items)
     extra = (4 if company["email"] else 0) + (4 if order.customer_name else 0)
-    return max(80.0, round(74 + name_lines * 5.4 + extra, 1))
+    return max(80.0, round(60 + name_lines * 4.9 + extra + logo_mm, 1))
 
 
 def get_receipt(request, order_id):
@@ -1243,7 +1254,12 @@ def get_receipt(request, order_id):
 @user_passes_test(can_ring_up)
 def print_order_pdf(request, order_id, order_number):
     order = get_receipt(request, order_id)
-    context = {"order": order, "order_number": order_number}
+    logo = static_image_data_uri(RECEIPT_LOGO)
+    context = {
+        "order": order,
+        "order_number": order_number,
+        "logo_data_uri": logo,
+    }
     today = dt.datetime.now()
     todays_date = f"{today:%d%m%Y%H%M%S}"
     filename = f"Invoice-{order.code}-{todays_date}.pdf"
@@ -1252,7 +1268,14 @@ def print_order_pdf(request, order_id, order_number):
         context=context,
         file_name=filename,
         css=["css/receipt.css"],
-        page_size_mm=(80, receipt_sheet_length_mm(order, settings.COMPANY_INFO)),
+        page_size_mm=(
+            80,
+            receipt_sheet_length_mm(
+                order,
+                settings.COMPANY_INFO,
+                RECEIPT_LOGO_HEIGHT_MM if logo else 0.0,
+            ),
+        ),
     )
     return pdf
 

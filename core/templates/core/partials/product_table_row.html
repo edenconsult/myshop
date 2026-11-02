@@ -118,6 +118,15 @@
         {% icon 'delete' 'text-[18px]' %}
         <span class="sr-only">Remove {{ product.name }}</span>
       </button>
+      <button title="Batch history"
+              type="button"
+              hx-get="{% url 'core:product-batches' product.id %}"
+              hx-target="#modal_root"
+              hx-swap="innerHTML"
+              class="flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-100">
+        {% icon 'sell' 'text-[18px]' %}
+        <span class="sr-only">Batch history for {{ product.name }}</span>
+      </button>
     </div>
   </td>
 </tr>

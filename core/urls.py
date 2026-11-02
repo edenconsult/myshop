@@ -65,6 +65,11 @@ urlpatterns = [
                     name="adjust-stock-question",
                 ),
                 path(
+                    "stock/<uuid:product_id>/batches/",
+                    batch_views.product_batches,
+                    name="product-batches",
+                ),
+                path(
                     "<uuid:product_id>/remove-product",
                     views.remove_a_product_question,
                     name="remove-a-product-question",

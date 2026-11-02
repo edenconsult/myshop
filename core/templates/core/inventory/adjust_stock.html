@@ -37,11 +37,15 @@
         hx-post="{% url 'core:update-product-stock' product.id %}"
         hx-target="#product_{{ product.id }}"
         hx-swap="outerHTML"
-        hx-on::after-request="document.querySelector('#modal_root [data-modal-close]')?.click()">
+        hx-on::after-request="if ($event.detail.successful) document.querySelector('#modal_root [data-modal-close]')?.click()">
     {% comment %}
       One key per dialog open, so a double click or a slow network that posts
       the same correction twice lands in the ledger as one adjustment.
       The POST response is the refreshed row, not a dialog, so close on arrival.
+      htmx 2.0.11 swaps nothing on a 4xx/5xx (a batch deleted between opening
+      this dialog and submitting answers 404), yet after-request still fires, so
+      the close is gated on the outcome: on failure the dialog stays open and
+      keeps the reason and units the admin typed; the row toast path is 2xx-only.
     {% endcomment %}
     <input type="hidden" name="request_key" :value="requestKey">
     <fieldset class="grid gap-2">

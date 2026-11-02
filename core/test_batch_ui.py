@@ -8,6 +8,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from authapp.models import Account
+from core.checkout import SaleLine, checkout
 from core.inventory import ReceiptLine, receive_stock
 from core.models import (
     Order,
@@ -225,6 +226,14 @@ class BatchesDialogTests(BatchUiTestCase):
 
         Seeded straight through the ORM (no checkout call): the dialog is a read
         path, and the fan-out the annotations must avoid is purely a query shape.
+        The shortcut is what leaves this row deliberately violating a real
+        invariant — check_inventory.py:78-82 requires
+        remaining == received + adjusted - sold, and this batch is seeded as
+        10 received / 6 sold / 2 adjusted / 10 remaining, which no service would
+        ever write. Harmless here because the dialog only prints the numbers and
+        never enforces them, and it isolates the query shape from any arithmetic.
+        Do NOT copy this fixture for a scenario that must balance: sell through
+        checkout instead, as test_sold_is_read_per_batch_not_per_product does.
         """
         batch = self.receive(10, "20.00", received_at=timezone.now())
         order = Order.objects.create(code="MOV001", user=self.cashier)
@@ -253,7 +262,8 @@ class BatchesDialogTests(BatchUiTestCase):
         row = response.context["batches"][0]
         self.assertEqual(row.sold, 6)
         self.assertEqual(row.adjusted, 2)
-        # the same numbers the owner actually sees: received, sold, adjusted, remaining
+        # the same numbers the owner actually sees: received, sold, adjusted,
+        # remaining — remaining is the seeded 10, not the invariant's 10-6+2=6
         self.assertEqual(self.tbody_rows(response.content.decode())[0][-4:],
                          ["10", "6", "2", "10"])
 
@@ -263,15 +273,53 @@ class BatchesDialogTests(BatchUiTestCase):
             lines=[ReceiptLine(self.product.pk, 10, Decimal("20.00"))],
             received_at=timezone.now(),
         )
-        batch = StockBatch.objects.get(product=self.product)
         response = self.client.get(
             reverse("core:product-batches", args=[self.product.pk])
         )
         row = response.context["batches"][0]
         self.assertEqual(row.sold, 0)
         self.assertEqual(row.adjusted, 0)
-        self.assertContains(response, "10")  # received
+        # the brief asserted assertContains(response, "10"), which any "10" in the
+        # document satisfied; pin the number to the Received cell it belongs to.
+        self.assertEqual(self.tbody_rows(response.content.decode())[0][-4:],
+                         ["10", "0", "0", "10"])
         self.assertContains(response, "GH₵ 20.00")
+
+    def test_sold_is_read_per_batch_not_per_product(self):
+        """A 5-unit FIFO sale split 4 + 1 across two batches must not read 5 + 5.
+
+        The fan-out test above has one batch, so any correlation key that widens
+        to the product still returns that batch's own total there and passes.
+        Sold through the real checkout service, so the whole fixture stays inside
+        check_inventory.py's invariant: both batches and the shelf agree.
+        """
+        # Spaced timestamps: two back-to-back timezone.now() calls can land on
+        # the same Windows clock tick, which would make FIFO order a coin flip.
+        older = timezone.now() - dt.timedelta(days=1)
+        self.receive(4, "10.00", received_at=older)
+        self.receive(6, "12.00", received_at=older + dt.timedelta(hours=1))
+        checkout(
+            actor=self.admin, request_key=uuid.uuid4(),
+            lines=[SaleLine(self.product.pk, 5, Decimal("90.00"))],
+        )
+        self.product.refresh_from_db()
+        response = self.open_dialog()
+        # newest receipt first: the 6-unit batch gave 1 unit, the 4-unit batch all 4
+        self.assertEqual(
+            [(b.quantity_received, b.sold, b.adjusted, b.quantity_remaining)
+             for b in response.context["batches"]],
+            [(6, 1, 0, 5), (4, 4, 0, 0)],
+        )
+        rows = self.tbody_rows(response.content.decode())
+        self.assertEqual(
+            [row[-4:] for row in rows],
+            [["6", "1", "0", "5"], ["4", "4", "0", "0 Depleted"]],
+        )
+        # the per-batch split is what the guard is for: one shared number fails
+        self.assertNotEqual(rows[0][-3], rows[1][-3])
+        # and the sums still agree, so the footer stays on its balanced branch
+        self.assertEqual(response.context["remaining_total"], self.product.stock)
+        self.assertNotContains(response, "out of balance")
 
     def test_saleperson_blocked(self):
         self.client.force_login(self.cashier)
@@ -292,7 +340,10 @@ class BatchesDialogTests(BatchUiTestCase):
         self.product.refresh_from_db()
         self.assertEqual(self.product.stock, 10)
         self.assertContains(response, "Sum of batches")
-        self.assertContains(response, "out of balance, run reconciliation")
+        self.assertContains(
+            response,
+            "out of balance, use Adjust Stock Count from the Current stock column",
+        )
 
     def test_balanced_shelf_does_not_claim_to_be_out_of_balance(self):
         self.receive(10, "20.00", received_at=timezone.now())

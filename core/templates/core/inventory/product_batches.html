@@ -87,7 +87,7 @@
     {% endif %}
     <span>
       Sum of batches <span class="tnum">{{ remaining_total|intcomma }}</span> · shelf count
-      <span class="tnum">{{ product.stock|intcomma }}</span>{% if remaining_total != product.stock %} — out of balance, run reconciliation{% endif %}
+      <span class="tnum">{{ product.stock|intcomma }}</span>{% if remaining_total != product.stock %} — out of balance, use Adjust Stock Count from the Current stock column{% endif %}
     </span>
   </p>
   <button type="button"

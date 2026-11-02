@@ -45,8 +45,10 @@ def product_batches(request, product_id):
     # sold and adjusted come from two different multi-valued relationships.
     # One annotate() over both would multiply the joins (2 allocations x 2
     # adjustments => each Sum reads 4 rows and both totals inflate), so each
-    # relation is aggregated on its own in a correlated subquery, the same
-    # fan-out-safe shape the receipt register uses.
+    # relation is aggregated on its own in a correlated subquery. The precedent
+    # in this repo is check_inventory.py:51-62, which recomputes the very same
+    # two sums that way to test the batch invariant; Task 4's register is
+    # planned to copy this shape too, but it does not exist yet.
     allocation_sum = (
         SaleBatchAllocation.objects.filter(batch=OuterRef("pk"))
         .values("batch")

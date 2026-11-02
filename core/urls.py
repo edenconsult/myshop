@@ -69,6 +69,12 @@ urlpatterns = [
                     batch_views.product_batches,
                     name="product-batches",
                 ),
+                path("receipts/", batch_views.stock_receipts, name="stock-receipts"),
+                path(
+                    "receipts/<uuid:receipt_id>/",
+                    batch_views.stock_receipt_detail,
+                    name="stock-receipt-detail",
+                ),
                 path(
                     "<uuid:product_id>/remove-product",
                     views.remove_a_product_question,

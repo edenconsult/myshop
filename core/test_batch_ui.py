@@ -466,3 +466,332 @@ class BatchesDialogTests(BatchUiTestCase):
             },
         )
         self.assertIn("#sell", body)  # the local sprite symbol the button draws
+
+
+class ReceiptPagesTests(BatchUiTestCase):
+    """Task 4 — the owner-facing receipt register: the list page and the line detail."""
+
+    def make_receipts(self):
+        """The two receipts the brief seeds, returned oldest first."""
+        # An hour apart on purpose: two back-to-back timezone.now() calls can
+        # land on the same Windows clock tick, and the newest-first ordering
+        # must never be a coin flip.
+        purchase = receive_stock(
+            actor=self.admin, request_key=uuid.uuid4(),
+            lines=[ReceiptLine(self.product.pk, 10, Decimal("20.00"))],
+            received_at=timezone.now(), supplier_name="Noble",
+        )
+        later = receive_stock(
+            actor=self.admin, request_key=uuid.uuid4(),
+            lines=[ReceiptLine(self.product.pk, 5, Decimal("25.00"))],
+            received_at=timezone.now() + dt.timedelta(hours=1),
+        )
+        return purchase, later
+
+    def drop_cutover_receipts(self):
+        """Remove the batch-less receipt 0015_backfill_opening_stock_and_costs writes.
+
+        That migration creates one cutover StockReceipt on every database — in the
+        test database, where no product has stock yet, it stays line-free. Tests
+        that need exact page arithmetic drop it (in-transaction, rolled back);
+        test_cutover_receipt_without_lines_reads_as_zero keeps it and asserts
+        what the owner sees on it.
+        """
+        StockReceipt.objects.filter(batches__isnull=True).delete()
+
+    def seed_receipts(self, total):
+        """`total` one-line receipts, index 0 the newest, written through the ORM.
+
+        The register is a read path and the page-size check needs 26 of them;
+        receive_stock would only rebuild, line by line, rows this test never
+        reads through a service.
+        """
+        for index in range(total):
+            receipt = StockReceipt.objects.create(
+                source=StockReceiptSource.PURCHASE,
+                received_at=timezone.now() - dt.timedelta(minutes=index),
+                recorded_by=self.admin,
+                supplier_name=f"Supplier {index}",
+            )
+            StockBatch.objects.create(
+                receipt=receipt,
+                product=self.product,
+                line_number=1,
+                quantity_received=1,
+                quantity_remaining=1,
+                unit_cost=Decimal("1.00"),
+            )
+
+    def open_detail(self, receipt):
+        return self.client.get(reverse("core:stock-receipt-detail", args=[receipt.pk]))
+
+    @staticmethod
+    def directive_attributes_in_main(html):
+        """Alpine/htmx directive attributes of the page's own markup.
+
+        Scoped to <main id="main-content"> because the shared header
+        (templates/partials/header.html) legitimately owns an x-data scope; the
+        block under review is what this page renders inside it.
+        """
+        void = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link",
+                "meta", "param", "source", "track", "wbr"}
+
+        class MainScopeProbe(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.depth = 0
+                self.found = []
+
+            def visit(self, tag, attrs, self_closing=False):
+                if not self.depth:
+                    if tag == "main" and dict(attrs).get("id") == "main-content":
+                        self.depth = 1
+                    return
+                if not self_closing and tag not in void:
+                    self.depth += 1
+                self.found.extend(
+                    name for name, _ in attrs
+                    if name.startswith(("x-", "hx-on", "@", ":"))
+                )
+
+            def handle_starttag(self, tag, attrs):
+                self.visit(tag, attrs)
+
+            def handle_startendtag(self, tag, attrs):
+                self.visit(tag, attrs, self_closing=True)
+
+            def handle_endtag(self, tag):
+                if self.depth and tag not in void:
+                    self.depth -= 1
+
+        probe = MainScopeProbe()
+        probe.feed(html)
+        return probe.found
+
+    def test_list_is_newest_first_with_totals_and_source_badges(self):
+        # the line-free cutover receipt 0015 leaves behind has its own test; this
+        # one is about the arithmetic of receipts that do have lines.
+        self.drop_cutover_receipts()
+        purchase, later = self.make_receipts()
+        response = self.client.get(reverse("core:stock-receipts"))
+        receipts = list(response.context["page_obj"].object_list)
+        self.assertEqual(len(receipts), 2)
+        self.assertEqual([r.pk for r in receipts], [later.pk, purchase.pk])
+        # The plan's `receipts[0].batches__units` is a plan defect: annotate()
+        # publishes the plain alias, never a join-keyed attribute.
+        self.assertEqual(receipts[0].units, 5)   # newest first
+        self.assertEqual(receipts[0].value, Decimal("125.00"))
+        # get_source_display() yields the humanised label ("Purchase"), so that
+        # is the string the badge shows and the string asserted here; the raw
+        # choice value is never printed.
+        self.assertContains(response, "Purchase")
+        self.assertContains(response, "Noble")
+        self.assertContains(response, "GH₵ 125.00")
+        rows = BatchesDialogTests.tbody_rows(response.content.decode())
+        self.assertEqual([row[3] for row in rows], ["Purchase", "Purchase"])  # Source
+        self.assertEqual([row[4] for row in rows], ["—", "Noble"])  # newest has no supplier
+        self.assertEqual([row[2] for row in rows], ["—", "—"])  # purchased_on unset
+        self.assertEqual([row[5] for row in rows], ["1", "1"])  # Lines
+        self.assertEqual([row[6] for row in rows], ["5", "10"])  # Units
+        self.assertEqual([row[7] for row in rows], ["GH₵ 125.00", "GH₵ 200.00"])  # Cost
+        self.assertIn(
+            timezone.localtime(receipts[0].received_at).strftime("%d %b %Y %H:%M"), rows[0][1]
+        )
+
+    def test_cutover_receipt_without_lines_reads_as_zero(self):
+        """The line-free receipt migration 0015 writes must not render blanks.
+
+        It is a real row the owner sees: a cutover StockReceipt with no
+        StockBatch (the backfill only gives lines to products that had stock).
+        A bare Subquery annotation would put None in the units, lines and cost
+        cells and leave the detail page with an empty table and no totals.
+        """
+        cutover = StockReceipt.objects.filter(batches__isnull=True).distinct().get()
+        rows = BatchesDialogTests.tbody_rows(
+            self.client.get(reverse("core:stock-receipts")).content.decode()
+        )
+        self.assertEqual([row for row in rows if row[0].startswith(cutover.id.hex[:8])][0][3:8],
+                         ["Opening balance", "—", "0", "0", "GH₵ 0.00"])
+        detail = self.open_detail(cutover)
+        self.assertEqual(detail.status_code, 200)
+        self.assertContains(detail, "This receipt has no lines.")
+        self.assertContains(detail, "GH₵ 0.00")
+        # one tbody row only, and it is the empty-state row, not a line row
+        self.assertEqual(len(BatchesDialogTests.tbody_rows(detail.content.decode())), 1)
+        self.assertEqual(detail.context["remaining_total"], 0)
+        self.assertEqual(detail.context["remaining_value_total"], Decimal("0.00"))
+
+    def test_list_pages_at_twenty_five_receipts(self):
+        self.drop_cutover_receipts()
+        self.seed_receipts(26)
+        response = self.client.get(reverse("core:stock-receipts"))
+        page = response.context["page_obj"]
+        self.assertEqual(page.paginator.per_page, 25)
+        self.assertEqual(page.paginator.num_pages, 2)
+        self.assertEqual(len(page.object_list), 25)
+        self.assertEqual(len(BatchesDialogTests.tbody_rows(response.content.decode())), 25)
+        # the footer links are plain hrefs: this page carries no script at all
+        self.assertContains(response, 'href="?page=2"')
+        second = self.client.get(reverse("core:stock-receipts"), {"page": "2"})
+        self.assertEqual(second.context["page_obj"].number, 2)
+        rows = BatchesDialogTests.tbody_rows(second.content.decode())
+        self.assertEqual([row[4] for row in rows], ["Supplier 25"])  # the oldest one
+        self.assertContains(second, "Showing rows 26–26 of 26 receipts")
+        self.assertContains(second, 'href="?page=1"')
+        # Paginator.get_page clamps instead of raising: junk and far-out numbers
+        # both answer 200, never a 500 on the owner's page.
+        self.assertEqual(self.client.get(reverse("core:stock-receipts"), {"page": "junk"}).status_code, 200)
+        oversized = self.client.get(reverse("core:stock-receipts"), {"page": "99"})
+        self.assertEqual(oversized.status_code, 200)
+        self.assertEqual(oversized.context["page_obj"].number, 2)
+
+    def test_list_without_receipts_says_so(self):
+        self.drop_cutover_receipts()
+        response = self.client.get(reverse("core:stock-receipts"))
+        self.assertEqual(len(response.context["page_obj"].object_list), 0)
+        self.assertContains(response, "No receipts have been recorded yet.")
+        self.assertContains(response, "Restock a product to open the ledger.")
+        # the footer's zero branch, worded so only it can satisfy this assertion
+        self.assertContains(response, "Nothing to page through")
+
+    def test_detail_lists_lines_with_remaining_and_estimated_flags(self):
+        purchase, _ = self.make_receipts()
+        response = self.open_detail(purchase)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Line 1")
+        self.assertContains(response, "GH₵ 20.00")
+        self.assertContains(response, str(purchase.id)[:8])
+        # a PURCHASE receipt never carries the flag (inventory.py:279 derives it
+        # from the source), so the word must not appear on this page...
+        self.assertNotContains(response, "estimated")
+        rows = BatchesDialogTests.tbody_rows(response.content.decode())
+        self.assertEqual(rows[0][-4:], ["0", "0", "10", "GH₵ 200.00"])
+        # ...while a non-purchase receipt does: same page, estimated cost and
+        # the humanised source label.
+        opening = receive_stock(
+            actor=self.admin, request_key=uuid.uuid4(),
+            lines=[ReceiptLine(self.product.pk, 3, Decimal("7.50"))],
+            received_at=timezone.now() + dt.timedelta(hours=2),
+            source=StockReceiptSource.OPENING, reason="Opened the till",
+        )
+        detail = self.open_detail(opening)
+        self.assertContains(detail, "Opening balance")
+        self.assertContains(detail, "Opened the till")
+        row = BatchesDialogTests.tbody_rows(detail.content.decode())[0]
+        self.assertEqual(row[1], "Shea Repair Balm SHB01")
+        self.assertEqual(row[3], "GH₵ 7.50 estimated")
+        self.assertEqual(row[-4:], ["0", "0", "3", "GH₵ 22.50"])
+
+    def test_detail_shows_what_is_still_on_the_shelf(self):
+        """Sold / adjusted / remaining per line, and the footer that totals them."""
+        receipt = receive_stock(
+            actor=self.admin, request_key=uuid.uuid4(),
+            lines=[ReceiptLine(self.product.pk, 10, Decimal("20.00"))],
+            received_at=timezone.now(),
+        )
+        checkout(
+            actor=self.admin, request_key=uuid.uuid4(),
+            lines=[SaleLine(self.product.pk, 4, Decimal("72.00"))],
+        )
+        response = self.open_detail(receipt)
+        row = BatchesDialogTests.tbody_rows(response.content.decode())[0]
+        self.assertEqual(row[-4:], ["4", "0", "6", "GH₵ 120.00"])
+        self.assertEqual([b.sold for b in response.context["batches"]], [4])
+        self.assertEqual(response.context["remaining_total"], 6)
+        self.assertEqual(response.context["remaining_value_total"], Decimal("120.00"))
+        self.assertContains(response, "GH₵ 200.00")  # received value
+        self.assertContains(response, "GH₵ 120.00")  # still on the shelf
+
+    def test_detail_orders_multi_line_receipts_by_line_number(self):
+        baobab = Product.objects.create(
+            name="Baobab Oil", sku="BOO1", stock=0,
+            cost=Decimal("5.00"), price=Decimal("10.00"), profit_rate=Decimal("0.50"),
+        )
+        receipt = receive_stock(
+            actor=self.admin, request_key=uuid.uuid4(),
+            lines=[
+                ReceiptLine(baobab.pk, 6, Decimal("8.00")),
+                ReceiptLine(self.product.pk, 3, Decimal("20.00")),
+            ],
+            received_at=timezone.now(),
+            supplier_name="Market Runner",
+            external_reference="GRN-11",
+            purchased_on=dt.date(2026, 10, 31),
+        )
+        response = self.open_detail(receipt)
+        self.assertEqual([b.line_number for b in response.context["batches"]], [1, 2])
+        rows = BatchesDialogTests.tbody_rows(response.content.decode())
+        self.assertEqual([row[0] for row in rows], ["Line 1", "Line 2"])
+        self.assertEqual([row[1] for row in rows], ["Baobab Oil BOO1", "Shea Repair Balm SHB01"])
+        # header card carries what the receipt was: supplier, GRN, purchase date
+        self.assertContains(response, "Market Runner")
+        self.assertContains(response, "GRN-11")
+        self.assertContains(response, "31 Oct 2026")
+        listed = self.client.get(reverse("core:stock-receipts"))
+        self.assertEqual(listed.context["page_obj"].object_list[0].line_count, 2)
+
+    def test_unknown_receipt_is_a_404(self):
+        self.assertEqual(
+            self.client.get(reverse("core:stock-receipt-detail", args=[uuid.uuid4()])).status_code,
+            404,
+        )
+
+    def test_saleperson_blocked_from_both_pages(self):
+        self.client.force_login(self.cashier)
+        receipt = receive_stock(
+            actor=self.admin, request_key=uuid.uuid4(),
+            lines=[ReceiptLine(self.product.pk, 1, Decimal("1.00"))],
+            received_at=timezone.now(),
+        )
+        # the brief's loop only covered the list page; both are ADMIN-only
+        for name in ("core:stock-receipts", "core:stock-receipt-detail"):
+            with self.subTest(page=name):
+                arguments = [] if name == "core:stock-receipts" else [receipt.pk]
+                self.assertEqual(
+                    self.client.get(reverse(name, args=arguments)).status_code, 302
+                )
+
+    def test_signed_out_requests_are_redirected(self):
+        self.client.logout()
+        self.assertEqual(self.client.get(reverse("core:stock-receipts")).status_code, 302)
+        self.assertEqual(
+            self.client.get(reverse("core:stock-receipt-detail", args=[uuid.uuid4()])).status_code,
+            302,
+        )
+
+    def test_both_pages_are_get_only(self):
+        receipt = receive_stock(
+            actor=self.admin, request_key=uuid.uuid4(),
+            lines=[ReceiptLine(self.product.pk, 1, Decimal("1.00"))],
+            received_at=timezone.now(),
+        )
+        self.assertEqual(
+            self.client.post(reverse("core:stock-receipts"), {}).status_code, 405
+        )
+        self.assertEqual(
+            self.client.post(reverse("core:stock-receipt-detail", args=[receipt.pk]), {}).status_code,
+            405,
+        )
+
+    def test_products_header_links_to_the_register(self):
+        response = self.client.get(reverse("core:products"))
+        self.assertContains(response, "Purchase Receipts")
+        self.assertContains(response, f'href="{reverse("core:stock-receipts")}"')
+        self.assertIn("#receipt_long", response.content.decode())
+
+    def test_register_pages_are_inert_markup(self):
+        """Both pages are read-only tables: no Alpine scope, no htmx handler."""
+        receipt = receive_stock(
+            actor=self.admin, request_key=uuid.uuid4(),
+            lines=[ReceiptLine(self.product.pk, 2, Decimal("3.00"))],
+            received_at=timezone.now(),
+        )
+        self.assertEqual(
+            self.directive_attributes_in_main(
+                self.client.get(reverse("core:stock-receipts")).content.decode()
+            ),
+            [],
+        )
+        self.assertEqual(
+            self.directive_attributes_in_main(self.open_detail(receipt).content.decode()), []
+        )

@@ -1,0 +1,96 @@
+{% load humanize %}
+{% load icons %}
+{% comment %}
+  One receipt line. The only renderer for a row: the dialog's GET, the dialog's
+  failure re-render and the blank-line endpoint all include this with a
+  _line_context() dict, so a posted line and a fresh one are the same markup.
+
+  The picker div MUST stay the element immediately after the search input: the
+  search targets it with hx-target="next .receipt-row-picker", which walks
+  following siblings. Every value the dialog's JS reads comes off a class, never
+  off [name="..."], because a quoted attribute selector would need a double
+  quote inside a double-quoted attribute.
+
+  is_first is only ever true for the dialog's first row (the blank-line endpoint
+  renders without it). products.html:201 focuses the overlay's first
+  [data-autofocus], so exactly one input carries it: the search box for a row
+  still looking for a product, the units box once one is chosen.
+{% endcomment %}
+<div class="receipt-row flex flex-col gap-2 rounded-lg border bg-white p-3 shadow-sm dark:bg-slate-900 {% if line.error %}border-rose-400 ring-2 ring-rose-200 dark:ring-rose-900{% else %}border-slate-200 dark:border-slate-700{% endif %} sm:grid sm:grid-cols-12 sm:items-start sm:gap-3">
+  <div class="min-w-0 sm:col-span-5">
+    <p class="receipt-row-chosen truncate text-sm font-semibold text-slate-900 dark:text-slate-100 {% if not line.product %}hidden{% endif %}">
+      {{ line.product.name }}
+      <span class="receipt-row-chosen-sku tnum ml-1 text-[11px] font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400 {% if not line.product %}hidden{% endif %}">
+        {{ line.product.sku|default:"No code" }}
+      </span>
+    </p>
+    <input type="hidden"
+           name="line_product_id[]"
+           class="receipt-row-product-id"
+           value="{{ line.product_id }}">
+    <input type="search"
+           autocomplete="off"
+           name="q"
+           class="receipt-row-search w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm text-slate-900 focus:border-emerald-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/30 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+           placeholder="Name or code"
+           aria-label="Find a product for this line"
+           {% if is_first and not line.product %}data-autofocus{% endif %}
+           hx-get="{% url 'core:receipt-product-options' %}"
+           hx-trigger="keyup changed delay:300ms"
+           hx-target="next .receipt-row-picker"
+           hx-swap="innerHTML">
+    <div class="receipt-row-picker mt-1 max-h-56 overflow-y-auto rounded-lg bg-slate-50 empty:hidden dark:bg-slate-950/60"></div>
+  </div>
+  <input type="number"
+         name="line_units[]"
+         min="1"
+         step="1"
+         class="receipt-row-units tnum rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5 text-sm font-semibold text-slate-900 focus:border-emerald-500 focus:bg-white focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 sm:col-span-2"
+         placeholder="Units"
+         aria-label="Units for this line"
+         {% if is_first and line.product %}data-autofocus{% endif %}
+         max="{{ max_units }}"
+         value="{{ line.units }}"
+         @input="syncReceipt()">
+  <div class="sm:col-span-2">
+    <input type="number"
+           name="line_unit_cost[]"
+           min="0"
+           step="0.01"
+           class="receipt-row-cost tnum w-full rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5 text-sm text-slate-900 focus:border-emerald-500 focus:bg-white focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+           placeholder="Unit cost"
+           aria-label="Unit cost for this line"
+           value="{{ line.unit_cost }}"
+           @input="syncReceipt()">
+  </div>
+  <div class="sm:col-span-2">
+    <input type="number"
+           name="line_selling_price[]"
+           min="0.01"
+           step="0.01"
+           class="receipt-row-price tnum w-full rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5 text-sm text-slate-900 focus:border-emerald-500 focus:bg-white focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+           placeholder="no change"
+           aria-label="New selling price for this line, blank to leave it"
+           value="{{ line.selling_price }}"
+           @input="syncReceipt()">
+  </div>
+  <button type="button"
+          class="flex h-8 w-8 shrink-0 items-center justify-center self-start rounded-lg text-slate-400 transition-colors hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-950/60 sm:col-span-1 sm:justify-self-end"
+          title="Remove this line"
+          @click="removeReceiptLine($el)">
+    {% icon 'delete' 'text-[18px]' %}
+    <span class="sr-only">Remove this line</span>
+  </button>
+  <div class="flex flex-wrap items-center gap-2 text-[11px] sm:col-span-12">
+    <span class="flex items-center gap-1">
+      {% for preset in presets %}
+        <button type="button"
+                class="rounded-md border border-slate-200 bg-slate-50 px-2 py-0.5 font-semibold text-slate-600 transition-colors hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+                data-preset="{{ preset }}"
+                @click="setReceiptUnits($el)">+{{ preset }}</button>
+      {% endfor %}
+    </span>
+    <span class="receipt-row-below-cost hidden rounded-full bg-rose-100 px-2 py-0.5 font-semibold uppercase text-rose-700 dark:bg-rose-950/60 dark:text-rose-400">below cost</span>
+    <span class="receipt-row-over-cap hidden rounded-full bg-amber-100 px-2 py-0.5 font-semibold uppercase text-amber-700 dark:bg-amber-950/60 dark:text-amber-400">over the sellable cap</span>
+  </div>
+</div>

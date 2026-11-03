@@ -1,0 +1,238 @@
+{% extends "partials/modal.html" %}
+{% load humanize %}
+{% load icons %}
+{% block modal_width %}max-w-4xl{% endblock modal_width %}
+{% block modal_icon %}{% icon 'inventory_2' 'text-[24px]' %}{% endblock modal_icon %}
+{% block modal_title %}Receive Delivery{% endblock modal_title %}
+{% block modal_subtitle %}Book one delivery, as many products as it carried.{% endblock modal_subtitle %}
+{% block dialog_attrs %}
+  x-data="{
+    maxRows: {{ max_rows }},
+    maxUnits: {{ max_units }},
+    priceCap: {{ price_cap }},
+    rowCount: {{ lines|length }},
+    emptyRows: 0,
+    requestKey: '{{ request_key }}' || (function () {
+      var api = window.crypto;
+      if (api &amp;&amp; typeof api.randomUUID === 'function') {
+        try {
+          return api.randomUUID();
+        } catch (err) {
+          /* plain http over the LAN: crypto.randomUUID is unavailable, so the key is built below */
+        }
+      }
+      var digits = [];
+      for (var i = 0; i &lt; 32; i++) {
+        digits.push(Math.floor(Math.random() * 16).toString(16));
+      }
+      digits[12] = '4';
+      digits[16] = ['8', '9', 'a', 'b'][Math.floor(Math.random() * 4)];
+      return digits.slice(0, 8).join('') + '-' + digits.slice(8, 12).join('') + '-' + digits.slice(12, 16).join('') + '-' + digits.slice(16, 20).join('') + '-' + digits.slice(20, 32).join('');
+    })(),
+    num(value) {
+      const parsed = parseFloat(value);
+      return isNaN(parsed) ? 0 : parsed;
+    },
+    money(value) {
+      return this.num(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    },
+    rowEls() {
+      return Array.from(this.$el.querySelectorAll('.receipt-row'));
+    },
+    set(selector, text) {
+      this.$el.querySelector(selector).textContent = text;
+    },
+    setReceiptUnits($el) {
+      const row = $el.closest('.receipt-row');
+      row.querySelector('.receipt-row-units').value = $el.dataset.preset;
+      this.syncReceipt();
+    },
+    pickReceiptProduct($el) {
+      const row = $el.closest('.receipt-row');
+      row.querySelector('.receipt-row-product-id').value = $el.dataset.productId;
+      const title = row.querySelector('.receipt-row-chosen');
+      title.textContent = $el.dataset.productName;
+      title.classList.remove('hidden');
+      const sku = row.querySelector('.receipt-row-chosen-sku');
+      sku.textContent = $el.dataset.productSku;
+      sku.classList.remove('hidden');
+      const cost = row.querySelector('.receipt-row-cost');
+      if (cost.value === '') {
+        cost.value = $el.dataset.productCost;
+      }
+      row.querySelector('.receipt-row-search').value = '';
+      row.querySelector('.receipt-row-picker').innerHTML = '';
+      this.syncReceipt();
+    },
+    removeReceiptLine($el) {
+      if (this.rowEls().length > 1) {
+        $el.closest('.receipt-row').remove();
+      }
+      this.syncReceipt();
+    },
+    syncReceipt() {
+      const rows = this.rowEls();
+      let units = 0;
+      let cost = 0;
+      let retail = 0;
+      let priced = 0;
+      let empty = 0;
+      rows.forEach((row) => {
+        const parsed = parseInt(row.querySelector('.receipt-row-units').value, 10);
+        const qty = isNaN(parsed) || parsed &lt; 1 ? 0 : parsed;
+        const lineCost = this.num(row.querySelector('.receipt-row-cost').value);
+        const priceInput = row.querySelector('.receipt-row-price');
+        const changed = priceInput.value !== '';
+        const each = changed ? this.num(priceInput.value) : lineCost;
+        row.querySelector('.receipt-row-below-cost').classList.toggle(
+          'hidden',
+          !(changed &amp;&amp; each &lt; lineCost)
+        );
+        row.querySelector('.receipt-row-over-cap').classList.toggle(
+          'hidden',
+          !(changed &amp;&amp; each > this.priceCap)
+        );
+        if (!row.querySelector('.receipt-row-product-id').value) {
+          empty += 1;
+        }
+        units += qty;
+        cost += qty * lineCost;
+        retail += qty * each;
+        priced += changed ? 1 : 0;
+      });
+      this.rowCount = rows.length;
+      this.emptyRows = empty;
+      this.set('.receipt-summary-units', units.toLocaleString('en-US'));
+      this.set('.receipt-summary-cost', this.money(cost));
+      this.set('.receipt-summary-retail', this.money(retail));
+      const margin = retail &lt;= 0 ? '0.0' : (((retail - cost) / retail) * 100).toFixed(1);
+      this.set('.receipt-summary-margin', (retail &gt; 0 &amp;&amp; retail - cost >= 0 ? '+' : '') + margin + '%');
+      this.set('.receipt-summary-lines', String(rows.length));
+      this.set('.receipt-summary-priced', String(priced));
+    },
+  }"
+  x-init="syncReceipt()"
+{% endblock dialog_attrs %}
+{% block modal_body %}
+  <form id="receive-form"
+        class="flex flex-col gap-4"
+        hx-post="{% url 'core:receive-stock-question' %}"
+        hx-target="#modal_root"
+        hx-swap="innerHTML">
+    {% if message %}
+      <p role="alert"
+         class="rounded-lg bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 dark:bg-rose-950/60 dark:text-rose-300">
+        Nothing was saved. {{ message }}
+      </p>
+    {% endif %}
+    <input type="hidden" name="request_key" :value="requestKey">
+    <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+      <label class="flex flex-col gap-1">
+        <span class="text-xs font-semibold uppercase tracking-wide text-slate-700 dark:text-slate-200">Purchased on</span>
+        <input name="purchased_on"
+               type="date"
+               value="{{ posted_purchased_on }}"
+               class="tnum w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 focus:border-emerald-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/30 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100">
+      </label>
+      <label class="flex flex-col gap-1">
+        <span class="text-xs font-semibold uppercase tracking-wide text-slate-700 dark:text-slate-200">Supplier</span>
+        <input name="supplier_name"
+               type="text"
+               maxlength="255"
+               value="{{ posted_supplier_name }}"
+               placeholder="Who sold it to you"
+               class="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-emerald-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/30 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100">
+      </label>
+      <label class="flex flex-col gap-1">
+        <span class="text-xs font-semibold uppercase tracking-wide text-slate-700 dark:text-slate-200">Invoice / reference</span>
+        <input name="external_reference"
+               type="text"
+               maxlength="255"
+               value="{{ posted_external_reference }}"
+               placeholder="INV-0000"
+               class="tnum w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 focus:border-emerald-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/30 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100">
+      </label>
+    </div>
+
+    <div class="flex flex-col gap-2">
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <span class="text-xs font-semibold uppercase tracking-wider text-slate-700 dark:text-slate-200">Lines</span>
+        <button type="button"
+                hx-get="{% url 'core:receipt-line-blank' %}"
+                hx-target="#receipt_lines"
+                hx-swap="beforeend"
+                hx-on::after-request="syncReceipt()"
+                :disabled="rowCount >= maxRows"
+                :class="rowCount >= maxRows ? 'cursor-not-allowed bg-slate-200 text-slate-400 dark:bg-slate-800' : 'bg-emerald-50 text-emerald-800 hover:bg-emerald-100 dark:bg-emerald-950/60 dark:text-emerald-300'"
+                class="inline-flex min-h-[32px] items-center gap-1.5 rounded-lg border border-emerald-200 px-3 py-1.5 text-xs font-semibold transition-colors dark:border-emerald-900">
+          {% icon 'add' 'text-[16px]' %}
+          <span>Add another product</span>
+        </button>
+      </div>
+      <div id="receipt_lines" class="flex flex-col gap-2">
+        {% for line in lines %}
+          {% include "core/products/partials/receipt_line_row.html" with line=line presets=presets max_units=max_units is_first=forloop.first %}
+        {% endfor %}
+      </div>
+      <p class="text-[11px] text-slate-500 dark:text-slate-400">
+        A blank selling price leaves that product's price where it is.
+        <span x-show="emptyRows > 0" class="font-semibold text-rose-600 dark:text-rose-400">Every line needs a product.</span>
+        <span class="receipt-summary-lines-note text-amber-700 dark:text-amber-400" x-show="rowCount >= maxRows">
+          This dialog stops at <span class="tnum">{{ max_rows }}</span> lines; book the rest as a second receipt.
+        </span>
+      </p>
+    </div>
+
+    <div class="flex flex-col gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/40">
+      <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-2 dark:border-slate-800">
+        <span class="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-slate-700 dark:text-slate-200">
+          {% icon 'insights' 'text-[18px] text-emerald-700 dark:text-emerald-400' %}
+          Calculation &amp; Ledger Impact
+        </span>
+        <span class="rounded-full px-2 py-0.5 text-[11px] font-semibold text-slate-600 dark:text-slate-300">
+          <span class="receipt-summary-lines tnum">0</span> line(s) on this receipt
+        </span>
+      </div>
+      <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div class="flex flex-col">
+          <span class="text-[11px] font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Units in</span>
+          <span class="receipt-summary-units tnum mt-0.5 text-base font-semibold text-slate-900 dark:text-slate-100">0</span>
+        </div>
+        <div class="flex flex-col">
+          <span class="text-[11px] font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Delivery cost</span>
+          <span class="mt-0.5 text-base font-semibold text-slate-900 dark:text-slate-100">
+            GH₵ <span class="receipt-summary-cost tnum">0.00</span>
+          </span>
+        </div>
+        <div class="flex flex-col">
+          <span class="text-[11px] font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Retail at these prices</span>
+          <span class="mt-0.5 text-base font-semibold text-slate-900 dark:text-slate-100">
+            GH₵ <span class="receipt-summary-retail tnum">0.00</span>
+          </span>
+        </div>
+        <div class="flex flex-col">
+          <span class="text-[11px] font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Gross margin</span>
+          <span class="receipt-summary-margin tnum mt-0.5 text-base font-semibold text-emerald-700 dark:text-emerald-400">+0.0%</span>
+        </div>
+      </div>
+      <p class="text-[11px] text-slate-500 dark:text-slate-400">
+        <span class="receipt-summary-priced tnum font-semibold">0</span> line(s) will change a store-wide selling price.
+      </p>
+    </div>
+  </form>
+{% endblock modal_body %}
+{% block modal_footer %}
+  <button type="button"
+          data-modal-close
+          class="rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-100">
+    Cancel
+  </button>
+  <button type="submit"
+          form="receive-form"
+          :disabled="emptyRows > 0 || rowCount === 0"
+          :class="emptyRows > 0 || rowCount === 0 ? 'cursor-not-allowed bg-slate-400 text-white dark:bg-slate-700 dark:text-slate-400' : 'bg-emerald-600 hover:bg-emerald-700 dark:bg-emerald-500 dark:text-slate-950 dark:hover:bg-emerald-400'"
+          class="inline-flex items-center justify-center gap-1.5 rounded-lg px-4 py-2 text-xs font-semibold text-white transition-colors">
+    {% icon 'check_circle' 'text-[18px]' %}
+    <span x-text="'Book ' + rowCount + (rowCount === 1 ? ' line' : ' lines')">Book 1 line</span>
+  </button>
+{% endblock modal_footer %}

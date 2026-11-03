@@ -379,3 +379,90 @@ class ReceiptProductSearchTests(ReceiptPricingTestCase):
             [awkward.name],
         )
         compile_js(self, html, **{"@click": "alpine"})
+
+
+class ReceiptDialogTests(ReceiptPricingTestCase):
+    def dialog(self, product_id=None):
+        url = reverse("core:receive-stock-question")
+        if product_id:
+            url = f"{url}?product_id={product_id}"
+        return self.client.get(url)
+
+    def test_opening_the_dialog_seeds_one_blank_line(self):
+        response = self.dialog()
+        html = response.content.decode()
+        self.assertEqual(html.count('class="receipt-row '), 1)
+        for name in ("line_product_id[]", "line_units[]", "line_unit_cost[]",
+                     "line_selling_price[]"):
+            self.assertIn(f'name="{name}"', html)
+        self.assertIn('name="request_key"', html)
+        self.assertEqual(html.count("data-autofocus"), 1)
+
+    def test_a_product_id_prefers_that_product_and_says_so(self):
+        html = self.dialog(self.bottle.pk).content.decode()
+        self.assertIn("Bottle Gargle", html)
+        self.assertEqual(html.count("data-autofocus"), 1)
+        self.assertEqual(html.count('class="receipt-row '), 1)
+        # the search box is answered, so focus must sit further along the row
+        searches = [
+            attributes
+            for _tag, attributes in self.elements_with_attributes(html)
+            if "receipt-row-search" in attributes.get("class", "")
+        ]
+        self.assertEqual(len(searches), 1)
+        self.assertNotIn("data-autofocus", searches[0])
+
+    def test_the_prefill_defaults_cost_from_the_catalogue_and_leaves_price_blank(self):
+        response = self.dialog(self.bottle.pk)
+        self.assertContains(response, 'value="4.00"')
+        self.assertContains(response, 'placeholder="no change"')
+        self.assertContains(response, f'value="{self.bottle.pk}"')
+
+    def test_an_unresolvable_product_id_still_opens_a_blank_dialog(self):
+        response = self.dialog(uuid.uuid4())
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("Bottle Gargle", response.content.decode())
+
+    def test_the_dialog_carries_exactly_one_parseable_x_data(self):
+        html = self.dialog().content.decode()
+        scopes = self.attribute_values(html, "x-data")
+        self.assertEqual(len(scopes), 1, "a dialog with two Alpine scopes has two ideas about the rows")
+        compile_js(self, html, **{"x-data": "expression"})
+
+    def test_no_js_attribute_carries_a_raw_double_quote(self):
+        html = self.dialog().content.decode()
+        for _tag, attributes in self.elements_with_attributes(html):
+            for name, value in attributes.items():
+                if name.startswith(self.JS_ATTRIBUTE_PREFIXES):
+                    self.assertNotIn('"', value, f"{name} would close its own attribute")
+
+    def test_every_handler_compiles_with_the_library_that_binds_it(self):
+        """htmx binds 'event', Alpine binds '$event' -- mixing them is a ReferenceError."""
+        html = self.dialog().content.decode()
+        compile_js(
+            self,
+            html,
+            **{
+                "@click": "alpine",
+                "@input": "alpine",
+                "x-text": "expression",
+                "x-show": "expression",
+                "x-init": "expression",
+                "hx-on::after-request": "htmx",
+            },
+        )
+
+    def test_the_blank_line_endpoint_returns_one_row_with_no_product(self):
+        response = self.client.get(reverse("core:receipt-line-blank"))
+        html = response.content.decode()
+        self.assertEqual(html.count('class="receipt-row '), 1)
+        self.assertIn('name="line_product_id[]"', html)
+        self.assertIn('value=""', html)
+        self.assertContains(response, "Name or code")
+
+    def test_the_cashier_cannot_open_either_endpoint(self):
+        self.client.force_login(self.cashier)
+        self.assertEqual(self.dialog().status_code, 302)
+        self.assertEqual(
+            self.client.get(reverse("core:receipt-line-blank")).status_code, 302
+        )

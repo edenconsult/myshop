@@ -5,7 +5,7 @@
   $el.dataset: a catalogue name is the one string that can break a JS literal,
   so it is never interpolated into @click, hx-* or x-*.
   This fragment carries no Alpine scope of its own: htmx swaps it inside the
-  dialog form, which owns the x-data.
+  dialog form, which owns the x-data that defines pickReceiptProduct().
 {% endcomment %}
 {% for product in products %}
   <button type="button"

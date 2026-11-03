@@ -24,6 +24,7 @@ from django.db.models.functions import Coalesce
 from django.shortcuts import get_object_or_404, render
 from django.views.decorators.http import require_GET
 
+from core.inventory import MAX_SELLING_PRICE
 from core.models import (
     Product,
     SaleBatchAllocation,
@@ -39,6 +40,43 @@ BATCH_VALUE = DecimalField(max_digits=24, decimal_places=2)
 # the picker returns a page of options, not a catalogue: twenty is what a
 # dialog's dropdown can be scanned without the owner scrolling.
 RECEIPT_SEARCH_RESULTS = 20
+
+# was core/views.MAX_RESTOCK_UNITS: a per-line input ceiling for the dialog, not
+# a service rule -- the service's own ceilings stay MAX_QUANTITY / MAX_RECEIPT_LINES.
+MAX_RECEIPT_LINE_UNITS = 100_000
+MAX_RECEIPT_DIALOG_ROWS = 50
+RECEIPT_UNIT_PRESETS = (12, 24, 48, 100)
+
+
+def _line_context(
+    product_id="", product=None, units="", unit_cost="", selling_price="", error=False
+):
+    """One receipt line as the row partial reads it: flat, all keys present.
+
+    The partial is the only renderer for a row -- GET, failed POST and the
+    blank-line endpoint all pass this dict -- so a row cannot look different
+    depending on which of the three built it.
+    """
+    return {
+        "product_id": product_id,
+        "product": product,
+        "units": units,
+        "unit_cost": unit_cost,
+        "selling_price": selling_price,
+        "error": error,
+    }
+
+
+def _dialog_context(request, *, lines=None, request_key="", message=""):
+    return {
+        "lines": lines if lines is not None else [_line_context()],
+        "request_key": request_key,
+        "message": message,
+        "max_units": MAX_RECEIPT_LINE_UNITS,
+        "max_rows": MAX_RECEIPT_DIALOG_ROWS,
+        "price_cap": MAX_SELLING_PRICE,
+        "presets": RECEIPT_UNIT_PRESETS,
+    }
 
 
 def _movement_annotations():
@@ -262,4 +300,52 @@ def receipt_product_options(request):
         request,
         "core/products/partials/receipt_product_options.html",
         {"products": products[:RECEIPT_SEARCH_RESULTS], "term": term},
+    )
+
+
+@login_required
+@require_GET
+@user_passes_test(is_admin)
+def receipt_line_blank(request):
+    """One empty line, swapped into the open dialog by 'Add another product'."""
+    return render(
+        request,
+        "core/products/partials/receipt_line_row.html",
+        {
+            "line": _line_context(),
+            "max_units": MAX_RECEIPT_LINE_UNITS,
+            "presets": RECEIPT_UNIT_PRESETS,
+        },
+    )
+
+
+@login_required
+@user_passes_test(is_admin)
+def receive_stock_question(request):
+    """Book one delivery, however many products it carried.
+
+    Deliberately not ``@require_GET``: this is the dialog's POST target too, the
+    way ``restock_product`` and ``add_product`` both answer GET and POST.
+    """
+    if request.method == "POST":
+        return _book_receipt(request)
+    lines = [_line_context()]
+    raw_product_id = request.GET.get("product_id")
+    if raw_product_id:
+        product = Product.objects.filter(pk=raw_product_id).first()
+        if product is not None:
+            lines = [
+                _line_context(
+                    product_id=str(product.pk),
+                    product=product,
+                    units=RECEIPT_UNIT_PRESETS[1],
+                    unit_cost=product.cost,
+                )
+            ]
+        # a product that is gone leaves a blank dialog rather than a 404: the
+        # dialog is for the delivery, and the owner can still book the rest of it.
+    return render(
+        request,
+        "core/products/modals/receive_stock.html",
+        _dialog_context(request, lines=lines),
     )

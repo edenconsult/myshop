@@ -71,6 +71,16 @@ urlpatterns = [
                 ),
                 path("receipts/", batch_views.stock_receipts, name="stock-receipts"),
                 path(
+                    "receipts/receive/",
+                    batch_views.receive_stock_question,
+                    name="receive-stock-question",
+                ),
+                path(
+                    "receipts/receive/line/",
+                    batch_views.receipt_line_blank,
+                    name="receipt-line-blank",
+                ),
+                path(
                     "receipts/product-search/",
                     batch_views.receipt_product_options,
                     name="receipt-product-options",

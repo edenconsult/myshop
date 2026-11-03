@@ -131,6 +131,14 @@ class StockBatch(models.Model):
     quantity_remaining = models.PositiveIntegerField()
     unit_cost = models.DecimalField(max_digits=10, decimal_places=2)
     cost_is_estimated = models.BooleanField(default=False)
+    # The selling price this line found and the one it left behind. Both null
+    # reads as "this line changed no price", which is every pre-existing row.
+    price_before = models.DecimalField(
+        max_digits=10, decimal_places=2, null=True, blank=True
+    )
+    price_applied = models.DecimalField(
+        max_digits=10, decimal_places=2, null=True, blank=True
+    )
 
     objects = models.Manager()
 

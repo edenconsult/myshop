@@ -80,6 +80,49 @@ class ReceiptPricingTestCase(BatchUiTestCase):
         )
 
 
+class PriceTrailColumnsTests(ReceiptPricingTestCase):
+    def test_both_price_columns_are_nullable_two_place_decimals(self):
+        for name in ("price_before", "price_applied"):
+            field = StockBatch._meta.get_field(name)
+            self.assertTrue(field.null, name)
+            # blank follows the nullable columns already on this model (actor,
+            # request_key); neither field is ever rendered by a ModelForm.
+            self.assertTrue(field.blank, name)
+            self.assertEqual(field.decimal_places, 2, name)
+            self.assertEqual(field.max_digits, 10, name)
+
+    def test_the_columns_exist_in_the_database(self):
+        receipt = self.book([ReceiptLine(self.product.pk, 4, Decimal("10.00"))])
+        batch = StockBatch.objects.get(receipt=receipt)
+        StockBatch.objects.filter(pk=batch.pk).update(
+            price_before=Decimal("18.00"), price_applied=Decimal("20.00")
+        )
+        batch.refresh_from_db()
+        self.assertEqual(batch.price_before, Decimal("18.00"))
+        self.assertEqual(batch.price_applied, Decimal("20.00"))
+
+    def test_exactly_one_additive_migration_adds_both_columns(self):
+        loader = MigrationLoader(None, ignore_no_migrations=True)
+        found = [
+            (name, migration)
+            for (app, name), migration in loader.disk_migrations.items()
+            if app == "core"
+            and any(
+                # model_name is how a migration spells a model -- lowercase --
+                # and AddField carries one field on .name/.field, unlike
+                # CreateModel's .fields list.
+                isinstance(op, migrations.AddField)
+                and op.model_name == "stockbatch"
+                and op.name in {"price_before", "price_applied"}
+                for op in migration.operations
+            )
+        ]
+        self.assertEqual(len(found), 1, f"expected one trail migration, got {[n for n, _ in found]}")
+        _name, migration = found[0]
+        for op in migration.operations:
+            self.assertIsInstance(op, migrations.AddField, "the trail migration must be additive only")
+
+
 class ReceiptProductSearchTests(ReceiptPricingTestCase):
     def url(self):
         return reverse("core:receipt-product-options")

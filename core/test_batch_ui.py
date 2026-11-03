@@ -425,6 +425,28 @@ class AdjustDialogTests(BatchUiTestCase):
         # the old nowrap class is what stretched the row
         self.assertNotIn("whitespace-nowrap", classes)
 
+    def test_row_money_cells_are_thousands_separated(self):
+        """Cost and Price on the ledger row were the branch's last raw renderings.
+
+        Only two `GH₵ {{ x }}` cells existed project-wide and both are here, so
+        this pin closes the class the dialog tests opened.
+        """
+        self.seed_batches()
+        Product.objects.filter(pk=self.product.pk).update(
+            cost=Decimal("1234.50"), price=Decimal("2000.00")
+        )
+        response = self.client.post(
+            reverse("core:update-product-stock", args=[self.product.pk]),
+            {"quantity_delta": "-1", "reason": "x", "request_key": str(uuid.uuid4())},
+        )
+        row_html = response.content.decode()
+        # The POST-error response IS the row fragment, so asserting on the
+        # document is asserting on the cell; tbody_rows cannot be used because a
+        # bare <tr> has no <tbody> for it to scope to.
+        self.assertContains(response, "GH₵ 1,234.50")
+        self.assertContains(response, "GH₵ 2,000.00")
+        self.assertNotIn("GH₵ 1234.50", row_html)
+
     def test_adjust_dialog_unit_cost_is_thousands_separated(self):
         """The batch line here printed the raw Decimal while its neighbours filter.
 

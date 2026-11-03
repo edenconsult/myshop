@@ -86,10 +86,10 @@
     </div>
   </td>
   <td class="tnum px-4 py-2 text-right align-middle text-sm text-slate-500 dark:text-slate-400">
-    GH₵ {{ product.cost }}
+    GH₵ {{ product.cost|floatformat:2|intcomma }}
   </td>
   <td class="tnum px-4 py-2 text-right align-middle text-sm font-semibold text-slate-900 dark:text-slate-100">
-    GH₵ {{ product.price }}
+    GH₵ {{ product.price|floatformat:2|intcomma }}
   </td>
   <td class="tnum px-4 py-2 text-right align-middle text-sm font-semibold {% if product.margin < 0 %}text-rose-600 dark:text-rose-400{% else %}text-emerald-700 dark:text-emerald-400{% endif %}">
     {% if product.margin > 0 %}+{% endif %}{{ product.margin|floatformat:1 }}%

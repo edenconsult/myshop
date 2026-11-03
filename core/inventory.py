@@ -21,6 +21,9 @@ from .models import (
 MAX_QUANTITY = 2_147_483_647
 MAX_RECEIPT_LINES = 500
 MAX_MONEY_DIGITS = 10
+# checkout refuses any sale line above this (core/checkout.py:157-159), so a
+# higher shelf price would book stock the store then cannot sell in one line.
+MAX_SELLING_PRICE = Decimal("9999.99")
 
 
 @dataclass(frozen=True)
@@ -28,6 +31,7 @@ class ReceiptLine:
     product_id: UUID
     quantity: int
     unit_cost: Decimal
+    selling_price: Decimal | None = None
 
 
 def _uuid(value, field_name):
@@ -60,6 +64,20 @@ def _decimal(value, field_name, *, max_digits=MAX_MONEY_DIGITS):
     if amount > Decimal(10) ** (max_digits - 2) - Decimal("0.01"):
         raise ValidationError({field_name: "The amount is too large."})
     return amount.quantize(Decimal("0.01"))
+
+
+def _selling_price(value, field_name):
+    """None means 'change nothing'; it is never read as a zero price."""
+    if value is None:
+        return None
+    amount = _decimal(value, field_name)
+    if amount <= 0:
+        raise ValidationError({field_name: "Enter a selling price above zero."})
+    if amount > MAX_SELLING_PRICE:
+        raise ValidationError(
+            {field_name: f"The selling price cannot exceed {MAX_SELLING_PRICE}."}
+        )
+    return amount
 
 
 def _fingerprint(payload):
@@ -142,6 +160,9 @@ def _normalize_receipt_lines(lines):
                 product_id=_uuid(line.product_id, f"lines[{index}].product_id"),
                 quantity=_quantity(line.quantity, f"lines[{index}].quantity"),
                 unit_cost=_decimal(line.unit_cost, f"lines[{index}].unit_cost"),
+                selling_price=_selling_price(
+                    line.selling_price, f"lines[{index}].selling_price"
+                ),
             )
         )
     return normalized
@@ -208,6 +229,11 @@ def receive_stock(
             "product_id": str(line.product_id),
             "quantity": line.quantity,
             "unit_cost": str(line.unit_cost),
+            # without this a replay carrying a *different* price would hash
+            # identically and be accepted as the same request.
+            "selling_price": (
+                str(line.selling_price) if line.selling_price is not None else None
+            ),
         }
         for line in lines
     ]

@@ -21,7 +21,12 @@ from django.urls import NoReverseMatch, reverse
 from django.utils import timezone
 
 from core.checkout import SaleLine, checkout
-from core.inventory import ReceiptLine, receive_stock
+from core.inventory import (
+    MAX_SELLING_PRICE,
+    ReceiptLine,
+    _normalize_receipt_lines,
+    receive_stock,
+)
 from core.models import Product, StockBatch, StockReceipt, StockReceiptSource
 from core.test_batch_ui import BatchUiTestCase
 
@@ -58,6 +63,11 @@ def compile_js(test_case, html, **shapes):
             )
 
 
+def _normalize(lines):
+    """The service's own line normalisation, without touching the database."""
+    return _normalize_receipt_lines(lines)
+
+
 class ReceiptPricingTestCase(BatchUiTestCase):
     """Fixture: a 18.00 priced product from the base case, plus a second product."""
 
@@ -78,6 +88,15 @@ class ReceiptPricingTestCase(BatchUiTestCase):
             source=source,
             reason=reason,
         )
+
+    def booked_receipts(self):
+        """Every receipt this feature booked, and nothing the cutover left behind.
+
+        Migration 0015 plants one OPENING receipt in every database it builds --
+        test data included -- so an absolute StockReceipt.objects.count() is
+        always one too many. test_inventory.py:148 made the same exclusion.
+        """
+        return StockReceipt.objects.exclude(source=StockReceiptSource.OPENING)
 
 
 class PriceTrailColumnsTests(ReceiptPricingTestCase):
@@ -121,6 +140,64 @@ class PriceTrailColumnsTests(ReceiptPricingTestCase):
         _name, migration = found[0]
         for op in migration.operations:
             self.assertIsInstance(op, migrations.AddField, "the trail migration must be additive only")
+
+
+class SellingPriceValidationTests(ReceiptPricingTestCase):
+    def test_no_price_means_no_change_and_stays_none(self):
+        line = _normalize([ReceiptLine(self.product.pk, 4, Decimal("10.00"))])[0]
+        self.assertIsNone(line.selling_price)
+
+    def test_a_zero_price_is_refused_naming_the_line(self):
+        with self.assertRaises(ValidationError) as caught:
+            self.book([ReceiptLine(self.product.pk, 4, Decimal("10.00"), Decimal("0.00"))])
+        self.assertEqual(list(caught.exception.error_dict), ["lines[1].selling_price"])
+
+    def test_a_price_above_the_checkout_cap_is_refused(self):
+        with self.assertRaises(ValidationError) as caught:
+            self.book(
+                [ReceiptLine(self.product.pk, 4, Decimal("10.00"), Decimal("10000.00"))]
+            )
+        self.assertIn(str(MAX_SELLING_PRICE), caught.exception.messages[0])
+
+    def test_a_price_with_three_decimal_places_is_refused(self):
+        with self.assertRaises(ValidationError):
+            self.book(
+                [ReceiptLine(self.product.pk, 4, Decimal("10.00"), Decimal("19.999"))]
+            )
+
+    def test_a_price_is_quantised_to_two_places(self):
+        line = _normalize([ReceiptLine(self.product.pk, 4, Decimal("10.00"), "19.9")])[0]
+        self.assertEqual(line.selling_price, Decimal("19.90"))
+
+    def test_replaying_a_key_with_a_different_price_is_refused(self):
+        key = uuid.uuid4()
+        self.book([ReceiptLine(self.product.pk, 4, Decimal("10.00"))], key=key)
+        with self.assertRaises(ValidationError) as caught:
+            self.book(
+                [ReceiptLine(self.product.pk, 4, Decimal("10.00"), Decimal("20.00"))],
+                key=key,
+            )
+        self.assertIn("already used for different data", str(caught.exception))
+
+    def test_replaying_a_key_with_the_same_price_returns_the_same_receipt(self):
+        key = uuid.uuid4()
+        lines = [ReceiptLine(self.product.pk, 4, Decimal("10.00"), Decimal("20.00"))]
+        first = self.book(lines, key=key)
+        second = self.book(lines, key=key)
+        self.assertEqual(first.pk, second.pk)
+        self.assertEqual(self.booked_receipts().count(), 1)
+
+    def test_the_service_ceiling_still_refuses_a_five_hundred_and_first_line(self):
+        """500 lines is the service's own boundary and it fires before any query;
+        the dialog's 50-row cap is a usability limit, not this one."""
+        lines = [
+            ReceiptLine(self.product.pk, 1, Decimal("1.00"), Decimal("2.00"))
+            for _ in range(501)
+        ]
+        with self.assertRaises(ValidationError) as caught:
+            _normalize(lines)
+        self.assertIn("500", caught.exception.messages[0])
+        self.assertEqual(self.booked_receipts().count(), 0)
 
 
 class ReceiptProductSearchTests(ReceiptPricingTestCase):

@@ -59,6 +59,7 @@ Every task's requirements include this section. Values are copied verbatim from 
 - **`price` is written with `bulk_update`, never with `product.save()`** — `Product.save()` raises on a stock change outside the services (`core/models.py:62-76`), and the same rule keeps the price write inside the row locks.
 - **Migrations: additive only, and the human applies them.** Two nullable columns, one file, no data migration, no `RunPython`. Never run `manage.py migrate` in this plan — the dev database holds the owner's real stock and it is a shared, outward-facing system, not a scratch one. As of 2026-11-03 it is caught up through `0019`, so the file Task 1 generates is `0020` and applying it is a one-line decision for the owner: report the filename, say that no page reading `StockBatch` works until it is applied (`ProgrammingError: column core_stockbatch.price_before does not exist`), and hand over `manage.py migrate` plus the reversal `manage.py migrate core 0019`. Live verification waits for that answer; `showmigrations` (read-only) shows whether it landed.
 - **Tests:** `.venv/Scripts/python.exe -B manage.py test <label> --noinput 2>&1 | grep -Ev "GLib-GIO|AUMId"`. The apps are `core` and `authapp` — **there is no `sales` app.** Run one suite at a time: the test DB is shared with the second session.
+- **Count booked receipts with the fixture's `booked_receipts()`, never `StockReceipt.objects.count()`.** Migration `0015_backfill_opening_stock_and_costs:84` creates one `OPENING` receipt in *every* database it builds, test databases included, so any absolute receipt count in this plan is one too many. Found executing Task 2 (two tests failed on it); `core/test_inventory.py:148` already makes the same exclusion for the same reason. Wherever a task below prints `StockReceipt.objects.count()`, read it as `self.booked_receipts().count()`.
 - **Never create a sale or a checkout against the dev database during live verification** — it takes real sales and history is delete-protected. The live browser is the owner's ADMIN session; use a separate cookie jar for other roles and revert any probe write.
 - **`core/products/response.html` is for success only.** A refused multi-line post re-renders the dialog with its lines intact (spec "Failure must not destroy the work").
 - Known pre-existing failure, not yours: `core.tests.CashierReceiptTests.test_the_register_links_the_cashier_to_their_own_receipt` fails after 20:00 because `views.py:1246-1257` counts only orders inside a hard 06:00–20:00 window. Do not "fix" it in this plan; report it as the one red test with that cause.
@@ -185,6 +186,15 @@ class ReceiptPricingTestCase(BatchUiTestCase):
             source=source,
             reason=reason,
         )
+
+    def booked_receipts(self):
+        """Every receipt this feature booked, and nothing the cutover left behind.
+
+        Migration 0015 plants one OPENING receipt in every database it builds --
+        test data included -- so an absolute StockReceipt.objects.count() is
+        always one too many. test_inventory.py:148 made the same exclusion.
+        """
+        return StockReceipt.objects.exclude(source=StockReceiptSource.OPENING)
 
 
 class PriceTrailColumnsTests(ReceiptPricingTestCase):

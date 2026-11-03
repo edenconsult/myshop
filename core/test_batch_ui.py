@@ -230,100 +230,81 @@ class BatchUiTestCase(TestCase):
         return probe.found
 
 
-class RestockDialogTests(BatchUiTestCase):
+class ReceiveDialogTests(BatchUiTestCase):
+    """The delivery dialog, in the shape the ledger books it in.
+
+    Replaces RestockDialogTests: the single-product write (views.restock_product,
+    core:restock-product, restock_product.html) is gone, so the six tests that
+    pinned it are re-written against the multi-line POST. Their intents survive
+    unchanged -- posted header fields are persisted, a replayed key books once,
+    the cashier is turned away -- except the failure test, whose premise the
+    multi-line dialog inverts: a refused post now returns the dialog with its
+    lines intact instead of core/products/response.html.
+    """
+
+    def post_delivery(self, *, units="10", cost="20.00", key=None, **header):
+        payload = {
+            "line_product_id[]": [str(self.product.pk)],
+            "line_units[]": [units],
+            "line_unit_cost[]": [cost],
+            "line_selling_price[]": [""],
+            "request_key": str(key or uuid.uuid4()),
+        }
+        payload.update(header)
+        return self.client.post(reverse("core:receive-stock-question"), payload)
+
     def test_dialog_exposes_cost_purchase_fields_and_request_key(self):
-        response = self.client.get(
-            reverse("core:restock-product", args=[self.product.pk])
-        )
-        self.assertContains(response, 'name="unit_cost"')
-        self.assertContains(response, 'name="request_key"')
-        self.assertContains(response, 'name="purchased_on"')
-        self.assertContains(response, 'name="supplier_name"')
-        self.assertContains(response, 'name="external_reference"')
+        response = self.client.get(reverse("core:receive-stock-question"))
+        for name in ("line_product_id[]", "line_unit_cost[]", "request_key",
+                     "purchased_on", "supplier_name", "external_reference"):
+            self.assertContains(response, f'name="{name}"')
 
     def test_posted_cost_date_and_supplier_are_persisted_not_catalogue_defaults(self):
         key = str(uuid.uuid4())
-        self.client.post(
-            reverse("core:restock-product", args=[self.product.pk]),
-            {"units": "10", "unit_cost": "20.00", "purchased_on": "2026-10-31",
-             "supplier_name": "Noble", "external_reference": "INV-7",
-             "request_key": key},
+        self.post_delivery(
+            purchased_on="2026-10-31", supplier_name="Noble",
+            external_reference="INV-7", key=key,
         )
         receipt = StockReceipt.objects.get(request_key=key)
         self.assertEqual(receipt.source, StockReceiptSource.PURCHASE)
         self.assertEqual(receipt.purchased_on, dt.date(2026, 10, 31))
         self.assertEqual(receipt.supplier_name, "Noble")
-        batch = StockBatch.objects.get(receipt=receipt)
-        self.assertEqual(batch.unit_cost, Decimal("20.00"))
+        self.assertEqual(StockBatch.objects.get(receipt=receipt).unit_cost, Decimal("20.00"))
         self.product.refresh_from_db()
-        self.assertEqual((self.product.stock, self.product.cost),
-                         (10, Decimal("20.00")))
+        self.assertEqual((self.product.stock, self.product.cost), (10, Decimal("20.00")))
 
     def test_replaying_the_same_dialog_key_adds_stock_once(self):
-        url = reverse("core:restock-product", args=[self.product.pk])
-        payload = {"units": "10", "unit_cost": "20.00",
-                   "request_key": str(uuid.uuid4())}
-        self.client.post(url, payload)
-        self.client.post(url, payload)
+        key = str(uuid.uuid4())
+        self.post_delivery(key=key)
+        self.post_delivery(key=key)
         self.product.refresh_from_db()
         self.assertEqual(self.product.stock, 10)
         self.assertEqual(StockBatch.objects.count(), 1)
 
-    def test_saleperson_cannot_open_or_post_restock(self):
+    def test_saleperson_cannot_open_or_post_a_delivery(self):
         self.client.force_login(self.cashier)
-        url = reverse("core:restock-product", args=[self.product.pk])
+        url = reverse("core:receive-stock-question")
         self.assertEqual(self.client.get(url).status_code, 302)
-        self.assertEqual(
-            self.client.post(url, {"units": "5", "request_key": str(uuid.uuid4())}).status_code,
-            302,
-        )
+        self.assertEqual(self.post_delivery().status_code, 302)
 
-    def test_failure_response_sends_the_owner_back_to_the_stock_dialog(self):
-        """The failure response replaces the dialog, so there is nothing to fix.
-
-        The form posts with hx-target="#modal_root" (restock_product.html:75) and
-        views.py answers a rejected shipment with core/products/response.html, so
-        the fields — and the one-per-open request key — are gone with the dialog.
-        The subtitle used to promise "Fix the details in the dialog and try
-        again", which is a lie; the success branch keeps its own copy.
-        """
-        url = reverse("core:restock-product", args=[self.product.pk])
-        failure = self.client.post(
-            url,
-            {"units": "0", "unit_cost": "20.00", "request_key": str(uuid.uuid4())},
-        )
+    def test_failure_returns_the_dialog_with_the_line_still_filled(self):
+        """The old answer -- response.html -- deleted the work; ten rows cannot afford it."""
+        failure = self.post_delivery(units="0")
         self.assertContains(failure, "Nothing was saved")
-        self.assertContains(
-            failure,
-            "Reopen the stock dialog for this product and enter the details again.",
-        )
-        self.assertNotContains(failure, "Fix the details in the dialog")
-        success = self.client.post(
-            url,
-            {"units": "10", "unit_cost": "20.00", "request_key": str(uuid.uuid4())},
-        )
+        self.assertContains(failure, 'name="line_product_id[]"')
+        self.assertContains(failure, "Shea Repair Balm")
+        self.assertContains(failure, 'value="20.00"')
+        success = self.post_delivery()
         self.assertContains(
             success, "The stock table behind this dialog already shows the change."
         )
 
-    def test_shelf_default_hint_uses_the_dialog_money_formatter(self):
-        """The hint shared the x-data scope's money(), so it kept the separator.
-
-        ``x-text`` is Alpine, so the extracted value compiles with the $event
-        binding rather than htmx's event one — see the JS-validation note on the
-        close-gate test in AdjustDialogMarkupTests.
-        """
-        response = self.client.get(
-            reverse("core:restock-product", args=[self.product.pk])
-        )
-        hints = [
-            value
-            for value in self.attribute_values(
-                response.content.decode(), "x-text"
-            )
-            if "unitCost" in value
-        ]
-        self.assertEqual(hints, ["money(unitCost)"])
+    def test_the_row_summary_uses_the_dialog_money_formatter(self):
+        """Every money figure in the dialog goes through the x-data scope's money(),
+        so a four-figure delivery cost keeps its thousands separator."""
+        html = self.client.get(reverse("core:receive-stock-question")).content.decode()
+        self.assertIn("this.money(cost)", self.attribute_values(html, "x-data")[0])
+        self.assertNotIn("toLocaleString('en-US') + '.00'", html)
 
 
 class AdjustDialogTests(BatchUiTestCase):

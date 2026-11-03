@@ -13,7 +13,10 @@ import subprocess
 import unittest
 import uuid
 from decimal import Decimal
+from html.parser import HTMLParser
+from pathlib import Path
 
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import migrations
 from django.db.migrations.loader import MigrationLoader
@@ -417,6 +420,15 @@ class ReceiptDialogTests(ReceiptPricingTestCase):
         self.assertContains(response, 'value="4.00"')
         self.assertContains(response, 'placeholder="no change"')
         self.assertContains(response, f'value="{self.bottle.pk}"')
+        html = response.content.decode()
+        search = next(
+            attributes
+            for _tag, attributes in self.elements_with_attributes(html)
+            if "receipt-row-search" in attributes.get("class", "")
+        )
+        self.assertIn("hidden", search["class"].split())
+        self.assertContains(response, "changeReceiptProduct($el)")
+        self.assertContains(response, "Change")
 
     def test_an_unresolvable_product_id_still_opens_a_blank_dialog(self):
         response = self.dialog(uuid.uuid4())
@@ -445,12 +457,117 @@ class ReceiptDialogTests(ReceiptPricingTestCase):
             **{
                 "@click": "alpine",
                 "@input": "alpine",
+                "@htmx:afterRequest": "alpine",
                 "x-text": "expression",
                 "x-show": "expression",
                 "x-init": "expression",
-                "hx-on::after-request": "htmx",
             },
         )
+
+    def test_no_htmx_handler_calls_an_alpine_method(self):
+        """An ``hx-on`` body is htmx's own function -- the dialog scope is not in it.
+
+        The button that adds a row used to carry
+        ``hx-on::after-request="syncReceipt()"``. It compiles (compile_js cannot
+        resolve a name), and htmx really does fire the event, so the second row
+        was born with a ReferenceError the console only shows once a row is
+        added. An ``@htmx:`` listener on the same element resolves against the
+        scope that owns the method.
+        """
+        html = self.dialog().content.decode()
+        scope = self.attribute_values(html, "x-data")[0]
+        control = {"if", "for", "while", "switch", "catch", "function"}
+        methods = {
+            name
+            for name in re.findall(r"\b(\w+)\s*\([^{}]*\)\s*\{", scope)
+            if name not in control
+        }
+        self.assertTrue(methods, "the regex found no scope methods to guard")
+        for _tag, attributes in self.elements_with_attributes(html):
+            for name, value in attributes.items():
+                if name.startswith("hx-on"):
+                    for method in methods:
+                        self.assertNotIn(
+                            f"{method}(",
+                            value,
+                            f"{name} calls {method}() from htmx's scope",
+                        )
+
+    def test_the_scope_reads_the_dialog_from_its_own_root(self):
+        """``this.$el`` is the element whose directive is running, not the x-data div.
+
+        Found live: an @input on the units box ran syncReceipt(), whose
+        ``this.$el.querySelector('.receipt-summary-units')`` is a lookup inside
+        an <input> -- null, and the summary never moved. x-init hands the scope
+        the element carrying it, and every lookup after that goes through root.
+        """
+        html = self.dialog().content.decode()
+        scope = self.attribute_values(html, "x-data")[0]
+        self.assertNotIn("this.$el", scope)
+        self.assertIn("this.root", scope)
+        self.assertNotIn("init(el)", scope)
+        self.assertIn("mount(el)", scope)
+        self.assertEqual(self.attribute_values(html, "x-init"), ["mount($el)"])
+
+    def element_and_children(self, html, class_name):
+        """How many elements carry ``class_name``, and the class sets inside them.
+
+        The pick handler rewrites a chosen product's name and code with
+        ``textContent``, and that write deletes the node's children. The first
+        live pass set the name, wiped the sku span nested inside it, and threw
+        "Cannot set properties of null" on the very next line -- so both halves
+        have to be single, childless elements of their own.
+        """
+
+        class NestingProbe(HTMLParser):
+            void = (
+                "area", "base", "br", "col", "embed", "hr", "img", "input",
+                "link", "meta", "source", "track", "wbr",
+            )
+
+            def __init__(self):
+                super().__init__(convert_charrefs=True)
+                self.stack = []
+                self.found = []
+                self.hits = 0
+
+            def visit(self, tag, attrs):
+                classes = (dict(attrs).get("class") or "").strip()
+                if any(level is None for level in self.stack):
+                    self.found.append(classes)
+                if tag not in self.void:
+                    if class_name in classes.split():
+                        self.hits += 1
+                        self.stack.append(None)
+                    else:
+                        self.stack.append(classes)
+
+            def handle_starttag(self, tag, attrs):
+                self.visit(tag, attrs)
+
+            def handle_startendtag(self, tag, attrs):
+                self.visit(tag, attrs)
+
+            def handle_endtag(self, tag):
+                if tag not in self.void and self.stack:
+                    self.stack.pop()
+
+        probe = NestingProbe()
+        probe.feed(html)
+        return probe.hits, probe.found
+
+    def test_the_pick_rewrites_the_name_and_the_code_as_leaves(self):
+        html = self.dialog(self.bottle.pk).content.decode()
+        for target in ("receipt-row-chosen-name", "receipt-row-chosen-sku"):
+            count, children = self.element_and_children(html, target)
+            self.assertEqual(count, 1, f".{target} must exist for the pick to write it")
+            self.assertEqual(
+                [child for child in children if child],
+                [],
+                f".{target} holds elements; a textContent write would delete them",
+            )
+        # the chosen-product container stays the single visibility switch
+        self.assertEqual(self.element_and_children(html, "receipt-row-chosen")[0], 1)
 
     def test_the_blank_line_endpoint_returns_one_row_with_no_product(self):
         response = self.client.get(reverse("core:receipt-line-blank"))
@@ -624,3 +741,38 @@ class ReceivePostTests(ReceiptPricingTestCase):
         response = self.post([(self.bottle.pk, 6, "5.00", None)], purchased_on="31-10-2026")
         self.assertContains(response, "purchase date")
         self.assertContains(response, 'name="line_product_id[]"')
+
+
+class EntryPointsTests(ReceiptPricingTestCase):
+    def test_the_old_single_product_endpoint_is_gone(self):
+        with self.assertRaises(NoReverseMatch):
+            reverse("core:restock-product", args=[self.product.pk])
+
+    def test_the_row_button_opens_the_dialog_prefilled_for_that_product(self):
+        response = self.client.get(reverse("core:load-products"), {"l": 10, "p": 1})
+        html = response.content.decode()
+        self.assertIn(
+            f'hx-get="{reverse("core:receive-stock-question")}'
+            f'?product_id={self.product.pk}"',
+            html,
+        )
+        self.assertNotIn("restock-product", html)
+
+    def test_the_products_page_offers_a_blank_delivery(self):
+        response = self.client.get(reverse("core:products"))
+        self.assertContains(
+            response, f'hx-get="{reverse("core:receive-stock-question")}"'
+        )
+        self.assertContains(response, "Receive Delivery")
+
+    def test_the_old_dialog_template_is_gone(self):
+        path = (
+            Path(settings.BASE_DIR)
+            / "core"
+            / "templates"
+            / "core"
+            / "products"
+            / "modals"
+            / "restock_product.html"
+        )
+        self.assertFalse(path.exists(), "two restock dialogs is two answers to one question")

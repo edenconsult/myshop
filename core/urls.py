@@ -55,11 +55,6 @@ urlpatterns = [
                     name="update-product",
                 ),
                 path(
-                    "<uuid:product_id>/restock-product",
-                    views.restock_product,
-                    name="restock-product",
-                ),
-                path(
                     "stock/<uuid:product_id>/adjust/",
                     batch_views.adjust_stock_question,
                     name="adjust-stock-question",

@@ -15,15 +15,26 @@
   renders without it). products.html:201 focuses the overlay's first
   [data-autofocus], so exactly one input carries it: the search box for a row
   still looking for a product, the units box once one is chosen.
+
+  The chosen name and its code are two separate elements and the <p> above them
+  is the only visibility switch: pickReceiptProduct() rewrites each with
+  textContent, and that write deletes whatever the node used to contain.
 {% endcomment %}
 <div class="receipt-row flex flex-col gap-2 rounded-lg border bg-white p-3 shadow-sm dark:bg-slate-900 {% if line.error %}border-rose-400 ring-2 ring-rose-200 dark:ring-rose-900{% else %}border-slate-200 dark:border-slate-700{% endif %} sm:grid sm:grid-cols-12 sm:items-start sm:gap-3">
   <div class="min-w-0 sm:col-span-5">
-    <p class="receipt-row-chosen truncate text-sm font-semibold text-slate-900 dark:text-slate-100 {% if not line.product %}hidden{% endif %}">
-      {{ line.product.name }}
-      <span class="receipt-row-chosen-sku tnum ml-1 text-[11px] font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400 {% if not line.product %}hidden{% endif %}">
-        {{ line.product.sku|default:"No code" }}
-      </span>
-    </p>
+    <div class="receipt-row-chosen flex min-h-[34px] min-w-0 items-center justify-between gap-2 {% if not line.product %}hidden{% endif %}">
+      <p class="min-w-0 truncate text-sm font-semibold text-slate-900 dark:text-slate-100">
+        <span class="receipt-row-chosen-name">{{ line.product.name }}</span>
+        <span class="receipt-row-chosen-sku tnum ml-1 text-[11px] font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">
+          {{ line.product.sku|default:"No code" }}
+        </span>
+      </p>
+      <button type="button"
+              class="shrink-0 rounded-md px-2 py-1 text-[11px] font-semibold text-emerald-700 transition-colors hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-950/60"
+              @click="changeReceiptProduct($el)">
+        Change
+      </button>
+    </div>
     <input type="hidden"
            name="line_product_id[]"
            class="receipt-row-product-id"
@@ -31,7 +42,7 @@
     <input type="search"
            autocomplete="off"
            name="q"
-           class="receipt-row-search w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm text-slate-900 focus:border-emerald-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/30 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+           class="receipt-row-search w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm text-slate-900 focus:border-emerald-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/30 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 {% if line.product %}hidden{% endif %}"
            placeholder="Name or code"
            aria-label="Find a product for this line"
            {% if is_first and not line.product %}data-autofocus{% endif %}
@@ -69,7 +80,7 @@
            min="0.01"
            step="0.01"
            class="receipt-row-price tnum w-full rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5 text-sm text-slate-900 focus:border-emerald-500 focus:bg-white focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-           placeholder="no change"
+           placeholder="New selling price (optional)"
            aria-label="New selling price for this line, blank to leave it"
            value="{{ line.selling_price }}"
            @input="syncReceipt()">

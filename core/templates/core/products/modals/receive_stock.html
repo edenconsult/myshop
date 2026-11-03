@@ -12,6 +12,7 @@
     priceCap: {{ price_cap }},
     rowCount: {{ lines|length }},
     emptyRows: 0,
+    root: null,
     requestKey: '{{ request_key }}' || (function () {
       var api = window.crypto;
       if (api &amp;&amp; typeof api.randomUUID === 'function') {
@@ -37,10 +38,17 @@
       return this.num(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     },
     rowEls() {
-      return Array.from(this.$el.querySelectorAll('.receipt-row'));
+      return Array.from(this.root.querySelectorAll('.receipt-row'));
     },
     set(selector, text) {
-      this.$el.querySelector(selector).textContent = text;
+      this.root.querySelector(selector).textContent = text;
+    },
+    /* $el is the element whose directive is running, so a handler on a row
+       input would search that input for the summary spans. x-init is the one
+       call made from the element carrying this scope. */
+    mount(el) {
+      this.root = el;
+      this.syncReceipt();
     },
     setReceiptUnits($el) {
       const row = $el.closest('.receipt-row');
@@ -50,18 +58,27 @@
     pickReceiptProduct($el) {
       const row = $el.closest('.receipt-row');
       row.querySelector('.receipt-row-product-id').value = $el.dataset.productId;
-      const title = row.querySelector('.receipt-row-chosen');
-      title.textContent = $el.dataset.productName;
-      title.classList.remove('hidden');
-      const sku = row.querySelector('.receipt-row-chosen-sku');
-      sku.textContent = $el.dataset.productSku;
-      sku.classList.remove('hidden');
+      const label = row.querySelector('.receipt-row-chosen');
+      label.classList.remove('hidden');
+      row.querySelector('.receipt-row-chosen-name').textContent = $el.dataset.productName;
+      row.querySelector('.receipt-row-chosen-sku').textContent = $el.dataset.productSku;
       const cost = row.querySelector('.receipt-row-cost');
       if (cost.value === '') {
         cost.value = $el.dataset.productCost;
       }
       row.querySelector('.receipt-row-search').value = '';
+      row.querySelector('.receipt-row-search').classList.add('hidden');
       row.querySelector('.receipt-row-picker').innerHTML = '';
+      this.syncReceipt();
+    },
+    changeReceiptProduct($el) {
+      const row = $el.closest('.receipt-row');
+      row.querySelector('.receipt-row-product-id').value = '';
+      row.querySelector('.receipt-row-chosen').classList.add('hidden');
+      row.querySelector('.receipt-row-search').classList.remove('hidden');
+      row.querySelector('.receipt-row-cost').value = '';
+      row.querySelector('.receipt-row-price').value = '';
+      row.querySelector('.receipt-row-search').focus();
       this.syncReceipt();
     },
     removeReceiptLine($el) {
@@ -111,7 +128,7 @@
       this.set('.receipt-summary-priced', String(priced));
     },
   }"
-  x-init="syncReceipt()"
+  x-init="mount($el)"
 {% endblock dialog_attrs %}
 {% block modal_body %}
   <form id="receive-form"
@@ -161,7 +178,7 @@
                 hx-get="{% url 'core:receipt-line-blank' %}"
                 hx-target="#receipt_lines"
                 hx-swap="beforeend"
-                hx-on::after-request="syncReceipt()"
+                @htmx:afterRequest="syncReceipt()"
                 :disabled="rowCount >= maxRows"
                 :class="rowCount >= maxRows ? 'cursor-not-allowed bg-slate-200 text-slate-400 dark:bg-slate-800' : 'bg-emerald-50 text-emerald-800 hover:bg-emerald-100 dark:bg-emerald-950/60 dark:text-emerald-300'"
                 class="inline-flex min-h-[32px] items-center gap-1.5 rounded-lg border border-emerald-200 px-3 py-1.5 text-xs font-semibold transition-colors dark:border-emerald-900">

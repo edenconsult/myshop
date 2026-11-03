@@ -1195,10 +1195,6 @@ input:checked + .toggle-bg {
   margin-right: -0.25rem;
 }
 
-.-mt-2 {
-  margin-top: -0.5rem;
-}
-
 .mb-1 {
   margin-bottom: 0.25rem;
 }
@@ -2659,10 +2655,6 @@ input:checked + .toggle-bg {
   padding-bottom: 7rem;
 }
 
-.pb-3 {
-  padding-bottom: 0.75rem;
-}
-
 .pb-4 {
   padding-bottom: 1rem;
 }
@@ -2673,10 +2665,6 @@ input:checked + .toggle-bg {
 
 .pl-10 {
   padding-left: 2.5rem;
-}
-
-.pl-14 {
-  padding-left: 3.5rem;
 }
 
 .pl-2 {
@@ -5261,11 +5249,6 @@ select {
   background-color: rgb(16 185 129 / var(--tw-bg-opacity));
 }
 
-:is(.dark .dark\:focus\:bg-slate-900:focus) {
-  --tw-bg-opacity: 1;
-  background-color: rgb(15 23 42 / var(--tw-bg-opacity));
-}
-
 :is(.dark .dark\:focus\:bg-slate-950:focus) {
   --tw-bg-opacity: 1;
   background-color: rgb(2 6 23 / var(--tw-bg-opacity));
@@ -5402,10 +5385,6 @@ select {
 
   .sm\:gap-4 {
     gap: 1rem;
-  }
-
-  .sm\:self-auto {
-    align-self: auto;
   }
 
   .sm\:justify-self-end {

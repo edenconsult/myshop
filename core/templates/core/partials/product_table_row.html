@@ -98,7 +98,7 @@
     <div class="flex items-center justify-center gap-1">
       <button title="Restock this product"
               type="button"
-              hx-get="{% url 'core:restock-product' product.id %}"
+              hx-get="{% url 'core:receive-stock-question' %}?product_id={{ product.id }}"
               hx-target="#modal_root"
               hx-swap="innerHTML"
               class="flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-emerald-50 hover:text-emerald-700 dark:text-slate-400 dark:hover:bg-emerald-950/60 dark:hover:text-emerald-400">

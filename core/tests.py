@@ -10,6 +10,7 @@ from io import BytesIO
 from unittest import mock
 from uuid import uuid4
 
+from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
 from django.urls import reverse
@@ -17,7 +18,16 @@ from django.utils import timezone
 from PIL import Image
 
 from authapp.models import Account
-from core.models import Order, OrderItem, Product, ProductCategory
+from core.inventory import ReceiptLine, receive_stock
+from core.forms import ProductCreationForm
+from core.models import (
+    Order,
+    OrderItem,
+    Product,
+    ProductCategory,
+    StockBatch,
+    StockReceiptSource,
+)
 from core.views import receipt_sheet_length_mm, report_context, report_range
 
 
@@ -65,7 +75,7 @@ class LedgerTestCase(TestCase):
         self.elixir = Product.objects.create(
             name="Hydrating Glow Elixir",
             sku="ELX01",
-            stock=50,
+            stock=0,
             cost=Decimal("60.00"),
             price=Decimal("140.00"),
             profit_rate=Decimal("0.57"),
@@ -73,11 +83,19 @@ class LedgerTestCase(TestCase):
         self.lipstick = Product.objects.create(
             name="Velvet Matte Lipstick",
             sku="LIP01",
-            stock=50,
+            stock=0,
             cost=Decimal("40.00"),
             price=Decimal("105.00"),
             profit_rate=Decimal("0.62"),
         )
+        for product in (self.elixir, self.lipstick):
+            receive_stock(
+                actor=self.admin,
+                request_key=uuid4(),
+                lines=[ReceiptLine(product.pk, 50, product.cost)],
+                received_at=timezone.now(),
+            )
+            product.refresh_from_db(fields=["stock", "cost", "updated"])
         self.client.force_login(self.admin)
 
     def make_order(self, code, user, items, hours_ago=0, days_ago=0):
@@ -89,6 +107,8 @@ class LedgerTestCase(TestCase):
                 product=product,
                 qty_bought=qty,
                 paid_amount=product.price * qty,
+                cost_amount=product.cost * qty,
+                cost_is_estimated=True,
             )
             for product, qty in items
         )
@@ -269,6 +289,22 @@ class ProductImageUploadTests(LedgerTestCase):
         self.assertTrue(product.image)
         self.assertIn("glow", product.image.name)
 
+    def test_new_product_initial_stock_is_an_estimated_opening_batch(self):
+        response = self.client.post(
+            reverse("core:add-product"),
+            product_form_data(),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "added to the stock ledger")
+        product = Product.objects.get(name="Shea Repair Balm")
+        batch = StockBatch.objects.get(product=product)
+        self.assertEqual(product.stock, 12)
+        self.assertEqual(batch.quantity_received, 12)
+        self.assertEqual(batch.quantity_remaining, 12)
+        self.assertTrue(batch.cost_is_estimated)
+        self.assertEqual(batch.receipt.source, StockReceiptSource.OPENING)
+
     def test_edit_without_touching_image_keeps_the_existing_file(self):
         self.elixir.image = png_upload("elixir.png")
         self.elixir.save()
@@ -282,6 +318,38 @@ class ProductImageUploadTests(LedgerTestCase):
 
         self.elixir.refresh_from_db()
         self.assertEqual(self.elixir.image.name, stored_name)
+
+    def test_edit_cannot_overwrite_existing_stock(self):
+        form = ProductCreationForm(instance=self.elixir)
+        self.assertNotIn("stock", form.fields)
+        data = product_form_data(self.elixir)
+        data.pop("stock")
+
+        response = self.client.post(
+            reverse("core:update-product", args=(self.elixir.id,)),
+            {**data, "stock": 99},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.elixir.refresh_from_db()
+        self.assertEqual(self.elixir.stock, 50)
+
+    def test_stale_product_save_cannot_overwrite_service_managed_stock(self):
+        stale_product = Product.objects.get(pk=self.elixir.pk)
+        receive_stock(
+            actor=self.admin,
+            request_key=uuid4(),
+            lines=[ReceiptLine(self.elixir.pk, 5, Decimal("55.00"))],
+            received_at=timezone.now(),
+        )
+        stale_product.name = "Renamed From A Stale Instance"
+
+        with self.assertRaises(ValidationError):
+            stale_product.save()
+
+        self.elixir.refresh_from_db()
+        self.assertEqual(self.elixir.name, "Hydrating Glow Elixir")
+        self.assertEqual(self.elixir.stock, 55)
 
     def test_image_clear_checkbox_detaches_the_file(self):
         self.elixir.image = png_upload("lipstick.png")
@@ -398,6 +466,10 @@ class ProductImageUploadTests(LedgerTestCase):
     def test_pos_tile_shows_the_photo_when_there_is_one(self):
         self.lipstick.image = png_upload("lipstick.png")
         self.lipstick.save()
+        self.assertEqual(
+            dict(Product.objects.values_list("name", "stock")),
+            {"Hydrating Glow Elixir": 50, "Velvet Matte Lipstick": 50},
+        )
 
         response = self.client.get(reverse("core:load-orders-products"))
         self.assertEqual(response.status_code, 200)
@@ -717,7 +789,11 @@ class SalesReportExportTests(LedgerTestCase):
         body = response.content.decode("utf-8")
         lines = [line for line in body.splitlines() if line.strip()]
 
-        self.assertEqual(lines[0], "S/No,Receipt,Date,Time,Cashier,Units,Cost,Total,Profit")
+        self.assertEqual(
+            lines[0],
+            "S/No,Receipt,Date,Time,Cashier,Units,Actual Cost,Estimated Cost,"
+            "Revenue,Actual Profit,Estimated Profit,Estimated Lines",
+        )
         self.assertEqual(len(lines), 2)  # only today's aba receipt is in range
         self.assertIn("EXE001", lines[1])
         self.assertNotIn("EXE002", body)
@@ -744,11 +820,17 @@ class LedgerStockViewTests(LedgerTestCase):
         self.kohl = Product.objects.create(
             name="Kohl Eye Pencil",
             sku="KHL01",
-            stock=3,
+            stock=0,
             low_stock_threshold=5,
             cost=Decimal("12.00"),
             price=Decimal("30.00"),
             profit_rate=Decimal("0.60"),
+        )
+        receive_stock(
+            actor=self.admin,
+            request_key=uuid4(),
+            lines=[ReceiptLine(self.kohl.pk, 3, self.kohl.cost)],
+            received_at=timezone.now(),
         )
 
     def partial(self, **params):
@@ -1480,4 +1562,3 @@ class CashierReceiptTests(LedgerTestCase):
         for url in self.receipt_urls(missing):
             with self.subTest(url=url):
                 self.assertEqual(self.client.get(url).status_code, 404)
-

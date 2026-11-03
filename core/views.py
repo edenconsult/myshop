@@ -1,5 +1,7 @@
 from django.contrib.auth.decorators import login_required, user_passes_test
-from django.db import transaction
+from django.core.exceptions import ValidationError
+from django.db import DatabaseError, transaction
+from django.db.models.deletion import ProtectedError
 from django.shortcuts import get_object_or_404, render
 from django.db.models import (
     Case,
@@ -15,12 +17,15 @@ from django.db.models import (
 )
 from django.http import HttpResponse
 from decimal import Decimal
+from uuid import UUID, uuid4
 
 from authapp.models import Account
-from .models import Product, ProductCategory, Order, OrderItem
+from .catalog_imports import PROFIT_RATE_MAX
+from .checkout import SaleLine, checkout
+from .inventory import ReceiptLine, adjust_batch, receive_stock
+from .models import Product, ProductCategory, Order, OrderItem, StockBatch, StockReceiptSource
 from utils import (
     can_ring_up,
-    generate_code,
     is_admin,
     parse_cart,
     render_attached_pdf,
@@ -29,7 +34,6 @@ from utils import (
 import io
 import logging
 from .tasks import (
-    PROFIT_RATE_MAX,
     import_products_task,
     remove_products_task,
 )
@@ -43,7 +47,6 @@ import math
 import datetime as dt
 from django.conf import settings
 from django.utils import timezone
-from django.db.models import QuerySet
 from django_htmx.http import trigger_client_event
 from django.views.decorators.http import require_GET, require_POST
 
@@ -57,7 +60,18 @@ LEDGER_PAGE_SIZE = 10
 # how many names the bulk-removal dialog lists before falling back to a count
 REMOVAL_SAMPLE_SIZE = 6
 
-MONEY_FIELD = DecimalField(max_digits=12, decimal_places=2)
+MONEY_FIELD = DecimalField(max_digits=24, decimal_places=2)
+
+
+def _posted_request_key(request):
+    raw_key = request.POST.get("request_key")
+    if not raw_key:
+        return uuid4()
+    try:
+        return UUID(raw_key)
+    except (ValueError, TypeError, AttributeError) as error:
+        raise ValidationError({"request_key": "Enter a valid request key."}) from error
+
 
 # the ledger's Margin column is gross margin on revenue: (retail - cost) /
 # retail, the same figure the add and restock dialogs show. price = 0 is
@@ -235,21 +249,38 @@ def load_products(request):
 @user_passes_test(is_admin)
 def update_product_stock(request, product_id):
     product = get_object_or_404(Product, pk=product_id)
-    stock = request.POST.get("stock")
-
     try:
-        stock = int(stock)
-    except (TypeError, ValueError):
-        stock = -1
-
-    if stock < 0:
-        # nothing to write back, so hand the row straight back unchanged
-        return render(
-            request, "core/partials/product_table_row.html", {"product": product}
+        batch_id = UUID(request.POST.get("batch_id", ""))
+        get_object_or_404(StockBatch, pk=batch_id, product=product)
+        quantity_delta = int(request.POST.get("quantity_delta", ""))
+        reason = request.POST.get("reason", "")
+        request_key = _posted_request_key(request)
+        adjust_batch(
+            actor=request.user,
+            request_key=request_key,
+            batch_id=batch_id,
+            quantity_delta=quantity_delta,
+            reason=reason,
         )
-
-    product.stock = stock
-    product.save()
+    except (ValueError, ValidationError) as error:
+        message = (
+            error.messages[0]
+            if isinstance(error, ValidationError)
+            else "Select a batch and enter a whole-number correction."
+        )
+        return render(
+            request,
+            "core/partials/product_table_row.html",
+            {"product": product, "error": message},
+        )
+    except DatabaseError:
+        logger.exception("Stock adjustment failed for product %s", product.pk)
+        return render(
+            request,
+            "core/partials/product_table_row.html",
+            {"product": product, "error": "The stock correction could not be saved."},
+        )
+    product.refresh_from_db(fields=["stock"])
     context = {"product": product}
     return render(request, "core/partials/product_table_row.html", context)
 
@@ -278,7 +309,7 @@ def do_import_products(request):
     try:
         # utf-8-sig: the dialog promises UTF-8 and Excel exports stamp a BOM
         csv_reader = csv.DictReader(io.TextIOWrapper(upload, encoding="utf-8-sig"))
-        rows = [row for row in csv_reader if row.get("PRODUCT")]
+        rows = list(csv_reader)
     except (UnicodeDecodeError, csv.Error):
         return render(
             request,
@@ -293,7 +324,21 @@ def do_import_products(request):
             {"error": "No product rows found. A PRODUCT column is required."},
         )
 
-    import_task = import_products_task.delay(rows, update_existing)  # type: ignore
+    try:
+        request_key = _posted_request_key(request)
+    except ValidationError as error:
+        return render(
+            request,
+            "core/products/modals/import_products.html",
+            {"error": error.messages[0]},
+        )
+
+    import_task = import_products_task.delay(
+        rows,
+        update_existing,
+        str(request.user.pk),
+        str(request_key),
+    )  # type: ignore
     task_id = import_task.task_id
     progress = Progress(AsyncResult(task_id))
     info = progress.get_info()
@@ -413,18 +458,51 @@ def add_product(request, product_id=None):
 
     if request.method == "POST" and form.is_valid():
         try:
-            saved = form.save(commit=False)
-            cost = form.cleaned_data["cost"]
-            price = form.cleaned_data["price"]
-            # profit_rate is the legacy decimal(3,2) column, so an unpriced or
-            # loss-making product would overflow it; the ledger renders
-            # Product.margin instead
-            saved.profit_rate = (
-                min(cost / price, PROFIT_RATE_MAX) if price > 0 else Decimal("0.00")
-            )
-            saved.save()
-        except Exception as e:
-            print(e)
+            with transaction.atomic():
+                saved = form.save(commit=False)
+                initial_stock = (
+                    form.cleaned_data["stock"] if product is None else 0
+                )
+                if product is not None:
+                    locked_product = Product.objects.select_for_update().get(
+                        pk=product.pk
+                    )
+                    saved.stock = locked_product.stock
+                else:
+                    saved.stock = 0
+                cost = form.cleaned_data["cost"]
+                price = form.cleaned_data["price"]
+                saved.profit_rate = (
+                    min(cost / price, PROFIT_RATE_MAX)
+                    if price > 0
+                    else Decimal("0.00")
+                )
+                saved.save()
+                form.save_m2m()
+                if initial_stock:
+                    receive_stock(
+                        actor=request.user,
+                        request_key=_posted_request_key(request),
+                        lines=[
+                            ReceiptLine(
+                                saved.pk,
+                                initial_stock,
+                                cost,
+                            )
+                        ],
+                        received_at=timezone.now(),
+                        source=StockReceiptSource.OPENING,
+                        reason="Initial stock entered when the product was created.",
+                    )
+        except ValidationError as error:
+            label = product.name if product else "New product"
+            context = {
+                "type": "danger",
+                "message": f"{label} could not be saved: {error.messages[0]}",
+            }
+            return render(request, "core/products/response.html", context)
+        except DatabaseError:
+            logger.exception("Product save failed for %s", product.pk if product else "new")
             label = product.name if product else "New product"
             context = {
                 "type": "danger",
@@ -455,7 +533,7 @@ RESTOCK_PRESETS = (12, 24, 48, 100)
 @login_required
 @user_passes_test(is_admin)
 def restock_product(request, product_id):
-    """Log an inbound shipment by adding units to the current shelf count."""
+    """Record an inbound shipment as a costed stock receipt."""
     product = get_object_or_404(Product, pk=product_id)
 
     if request.method == "POST":
@@ -472,8 +550,47 @@ def restock_product(request, product_id):
             }
             return render(request, "core/products/response.html", context)
 
-        Product.objects.filter(pk=product.pk).update(stock=F("stock") + units)
-        product.refresh_from_db(fields=["stock"])
+        try:
+            raw_cost = request.POST.get("unit_cost", product.cost)
+            receive_stock(
+                actor=request.user,
+                request_key=_posted_request_key(request),
+                lines=[
+                    ReceiptLine(
+                        product.pk,
+                        units,
+                        raw_cost,
+                    )
+                ],
+                received_at=timezone.now(),
+                source=StockReceiptSource.PURCHASE,
+                purchased_on=(
+                    dt.date.fromisoformat(request.POST["purchased_on"])
+                    if request.POST.get("purchased_on")
+                    else None
+                ),
+                supplier_name=request.POST.get("supplier_name", ""),
+                external_reference=request.POST.get("external_reference", ""),
+            )
+        except (ValueError, ValidationError) as error:
+            message = (
+                error.messages[0]
+                if isinstance(error, ValidationError)
+                else "Enter a valid acquisition cost and purchase date."
+            )
+            return render(
+                request,
+                "core/products/response.html",
+                {"type": "danger", "message": message},
+            )
+        except DatabaseError:
+            logger.exception("Product receipt failed for product %s", product.pk)
+            return render(
+                request,
+                "core/products/response.html",
+                {"type": "danger", "message": "The receipt could not be saved."},
+            )
+        product.refresh_from_db(fields=["stock", "cost"])
 
         context = {
             "type": "success",
@@ -497,7 +614,7 @@ def remove_a_product_question(request, product_id):
     product = get_object_or_404(Product, pk=product_id)
     context = {
         "product": product,
-        "order_lines": product.orderitem_set.count(),
+        "order_lines": OrderItem.objects.filter(product=product).count(),
     }
     return render(request, "core/products/modals/remove_product.html", context)
 
@@ -506,17 +623,36 @@ def remove_a_product_question(request, product_id):
 @user_passes_test(is_admin)
 @require_POST
 def do_remove_a_product(request, product_id):
-    product = get_object_or_404(Product, pk=product_id)
-    name = product.name
-    order_lines = product.orderitem_set.count()
-    product.delete()
-    if order_lines:
-        detail = f" {order_lines} order line{'s' if order_lines > 1 else ''} went with it."
-    else:
-        detail = " Sales history was untouched."
+    name = ""
+    try:
+        with transaction.atomic():
+            product = get_object_or_404(
+                Product.objects.select_for_update(),
+                pk=product_id,
+            )
+            name = product.name
+            if (
+                product.stock != 0
+                or OrderItem.objects.filter(product=product).exists()
+                or StockBatch.objects.filter(product=product).exists()
+            ):
+                raise ProtectedError(
+                    "Products with inventory history cannot be deleted.",
+                    {product},
+                )
+            product.delete()
+    except ProtectedError:
+        return render(
+            request,
+            "core/products/response.html",
+            {
+                "type": "danger",
+                "message": f"{name} has inventory or history and cannot be deleted.",
+            },
+        )
     context = {
         "type": "success",
-        "message": f"{name} was removed from the ledger." + detail,
+        "message": f"{name} was removed from the ledger.",
     }
     response = render(request, "core/products/response.html", context)
     return trigger_client_event(response, "reload_products_table")
@@ -552,15 +688,19 @@ def ledger_today_kpis():
     revenue = totals["revenue"] or Decimal("0.00")
 
     today_items = OrderItem.objects.filter(order__in=today_orders)
-    profit = today_items.aggregate(
-        total=Sum(
+    today_totals = today_items.aggregate(
+        profit=Sum(
             ExpressionWrapper(
-                F("qty_bought") * (F("product__price") - F("product__cost")),
+                F("paid_amount") - F("cost_amount"),
                 output_field=MONEY_FIELD,
             )
-        )
-    )["total"]
-    profit = profit or Decimal("0.00")
+        ),
+        estimated_lines=Count("id", filter=Q(cost_is_estimated=True)),
+        actual_lines=Count("id", filter=Q(cost_is_estimated=False)),
+        actual_cost=Sum("cost_amount", filter=Q(cost_is_estimated=False)),
+        estimated_cost=Sum("cost_amount", filter=Q(cost_is_estimated=True)),
+    )
+    profit = today_totals["profit"] or Decimal("0.00")
     units = today_items.aggregate(units=Sum("qty_bought"))["units"] or 0
 
     yesterday_revenue = (
@@ -587,6 +727,11 @@ def ledger_today_kpis():
         if count
         else None,
         "profit": profit,
+        "actual_cost": today_totals["actual_cost"] or Decimal("0.00"),
+        "estimated_cost": today_totals["estimated_cost"] or Decimal("0.00"),
+        "estimated_line_count": today_totals["estimated_lines"],
+        "actual_line_count": today_totals["actual_lines"],
+        "profit_is_estimated": today_totals["estimated_lines"] > 0,
         "margin_pct": (profit / revenue * 100).quantize(Decimal("0.1"))
         if revenue
         else None,
@@ -705,28 +850,42 @@ def report_orders(rng, start_key="start", end_key="end"):
 
 
 def report_metrics(orders):
-    """Units, money and margin for one set of receipts.
-
-    Revenue is what the receipts actually charged; cost and profit are priced
-    from the *current* catalogue, because OrderItem keeps no cost snapshot —
-    the same convention the legacy reports used.
-    """
+    """Aggregate receipt revenue and frozen actual/estimated acquisition costs."""
     totals = orders.aggregate(
         order_count=Count("id"),
         revenue=Sum("overall_amount_paid"),
     )
     lines = OrderItem.objects.filter(order__in=orders).aggregate(
         units=Sum("qty_bought"),
-        cost=Sum(
-            ExpressionWrapper(
-                F("qty_bought") * F("product__cost"), output_field=MONEY_FIELD
-            )
-        ),
+        cost=Sum("cost_amount"),
         profit=Sum(
             ExpressionWrapper(
-                F("qty_bought") * (F("product__price") - F("product__cost")),
+                F("paid_amount") - F("cost_amount"),
                 output_field=MONEY_FIELD,
             )
+        ),
+        actual_cost=Sum("cost_amount", filter=Q(cost_is_estimated=False)),
+        estimated_cost=Sum("cost_amount", filter=Q(cost_is_estimated=True)),
+        actual_profit=Sum(
+            ExpressionWrapper(
+                F("paid_amount") - F("cost_amount"),
+                output_field=MONEY_FIELD,
+            ),
+            filter=Q(cost_is_estimated=False),
+        ),
+        estimated_profit=Sum(
+            ExpressionWrapper(
+                F("paid_amount") - F("cost_amount"),
+                output_field=MONEY_FIELD,
+            ),
+            filter=Q(cost_is_estimated=True),
+        ),
+        actual_line_count=Count("id", filter=Q(cost_is_estimated=False)),
+        estimated_line_count=Count("id", filter=Q(cost_is_estimated=True)),
+        estimated_order_count=Count(
+            "order_id",
+            filter=Q(cost_is_estimated=True),
+            distinct=True,
         ),
     )
 
@@ -741,6 +900,22 @@ def report_metrics(orders):
         "revenue": revenue.quantize(Decimal("0.01")),
         "cost": cost.quantize(Decimal("0.01")),
         "profit": profit.quantize(Decimal("0.01")),
+        "actual_cost": (lines["actual_cost"] or Decimal("0.00")).quantize(
+            Decimal("0.01")
+        ),
+        "estimated_cost": (lines["estimated_cost"] or Decimal("0.00")).quantize(
+            Decimal("0.01")
+        ),
+        "actual_profit": (lines["actual_profit"] or Decimal("0.00")).quantize(
+            Decimal("0.01")
+        ),
+        "estimated_profit": (
+            lines["estimated_profit"] or Decimal("0.00")
+        ).quantize(Decimal("0.01")),
+        "actual_line_count": lines["actual_line_count"],
+        "estimated_line_count": lines["estimated_line_count"],
+        "estimated_order_count": lines["estimated_order_count"],
+        "profit_is_estimated": lines["estimated_line_count"] > 0,
         "margin_pct": _pct(profit, revenue),
         "cost_share_pct": _pct(cost, revenue),
         "profit_multiplier": (profit / cost).quantize(Decimal("0.01"))
@@ -856,16 +1031,22 @@ def export_orders_csv(request):
 
     writer = csv.writer(response)
     writer.writerow(["Receipt", "Date", "Time", "Cashier", "Items", "Total (GHs)"])
-    for order in orders_qs.iterator():
-        local_created = timezone.localtime(order.created)
+    for order in orders_qs.values(
+        "code",
+        "created",
+        "user__username",
+        "items_count",
+        "overall_amount_paid",
+    ).iterator():
+        local_created = timezone.localtime(order["created"])
         writer.writerow(
             [
-                order.code,
+                order["code"],
                 f"{local_created:%Y-%m-%d}",
                 f"{local_created:%H:%M:%S}",
-                order.user.username,
-                order.items_count,
-                order.overall_amount_paid,
+                order["user__username"],
+                order["items_count"],
+                order["overall_amount_paid"],
             ]
         )
     return response
@@ -876,7 +1057,6 @@ def export_orders_csv(request):
 def products_summary(request):
     totals = Product.objects.aggregate(
         sum_stock=Sum("stock"),
-        sum_cost=Sum(F("cost") * F("stock"), output_field=MONEY_FIELD),
         sum_sales=Sum(F("price") * F("stock"), output_field=MONEY_FIELD),
         total=Count("id"),
         depleted=Count("id", filter=Q(stock=0)),
@@ -884,7 +1064,29 @@ def products_summary(request):
         categories=Count("category", distinct=True),
     )
 
-    cost_value = totals["sum_cost"] or Decimal("0.00")
+    batch_value = StockBatch.objects.aggregate(
+        cost_value=Sum(
+            ExpressionWrapper(
+                F("quantity_remaining") * F("unit_cost"),
+                output_field=MONEY_FIELD,
+            )
+        ),
+        estimated_cost_value=Sum(
+            ExpressionWrapper(
+                F("quantity_remaining") * F("unit_cost"),
+                output_field=MONEY_FIELD,
+            ),
+            filter=Q(cost_is_estimated=True),
+        ),
+        estimated_units=Sum(
+            "quantity_remaining",
+            filter=Q(cost_is_estimated=True),
+        ),
+    )
+    cost_value = batch_value["cost_value"] or Decimal("0.00")
+    estimated_cost_value = (
+        batch_value["estimated_cost_value"] or Decimal("0.00")
+    )
     retail_value = totals["sum_sales"] or Decimal("0.00")
     valuation_margin = (
         (retail_value - cost_value) / retail_value * 100
@@ -907,6 +1109,10 @@ def products_summary(request):
         "categories_count": totals["categories"],
         "units_in_stock": totals["sum_stock"] or 0,
         "cost_value": cost_value,
+        "actual_cost_value": cost_value - estimated_cost_value,
+        "estimated_cost_value": estimated_cost_value,
+        "estimated_stock_units": batch_value["estimated_units"] or 0,
+        "cost_value_is_estimated": (batch_value["estimated_units"] or 0) > 0,
         "retail_value": retail_value,
         "valuation_margin": valuation_margin,
         "low_stock_count": totals["low"],
@@ -995,94 +1201,45 @@ def make_order(request):
         context = {"type": msg_type, "message": message}
         return render(request, "core/orders/order_made.html", context)
 
-    order_obj = None
     try:
-        with transaction.atomic():
-            # fetch all products at once, locking their rows for the duration
-            # of the transaction so two parallel sales cannot oversell stock
-            products = {
-                str(product.id): product
-                for product in Product.objects
-                .select_for_update()
-                .filter(id__in=[item.get("id") for item in items])
-            }
-
-            order_errors = []
-            new_order_items = []
-            for item in items:
-                product = products.get(str(item.get("id")))
-                qty = int(item.get("qty", 0))
-
-                # if the product does not exist
-                if product is None:
-                    order_errors.append(
-                        {"item": item, "error": f"Product {item.get('id')} not found"}
-                    )
-                    continue
-
-                # else if stock is less than the required quantity
-                if qty > product.stock:
-                    continue
-
-                # else if the calculated total price send is wrong,
-                if float(item.get("total_price")) != float(product.price * qty):
-                    order_errors.append(
-                        {
-                            "item": item,
-                            "error": f"Product {product} items calculation was wrong",  # noqa: E501
-                        }
-                    )
-                    continue
-
-                # if item passed the product checks
-                new_order_items.append({"product": product, "item": item, "qty": qty})
-
-            if len(items) != len(new_order_items):
-                raise ValueError(f"Order validation failed: {order_errors}")
-
-            # create new order
-            order_obj = Order.objects.create(
-                user=request.user, code=generate_code(max_length=6)
-            )
-
-            # insert every order item in a single query
-            OrderItem.objects.bulk_create(
-                OrderItem(
-                    order=order_obj,
-                    product=entry["product"],
-                    qty_bought=entry["qty"],
-                    paid_amount=Decimal(str(entry["item"].get("total_price"))),
+        sale_lines = []
+        for item in items:
+            raw_quantity = item.get("qty")
+            if isinstance(raw_quantity, bool):
+                raise ValidationError({"quantity": "Enter a whole number."})
+            try:
+                quantity = int(raw_quantity)
+            except (TypeError, ValueError) as error:
+                raise ValidationError({"quantity": "Enter a whole number."}) from error
+            if isinstance(raw_quantity, float) and not raw_quantity.is_integer():
+                raise ValidationError({"quantity": "Enter a whole number."})
+            if isinstance(raw_quantity, str) and raw_quantity.strip() != str(quantity):
+                raise ValidationError({"quantity": "Enter a whole number."})
+            sale_lines.append(
+                SaleLine(
+                    product_id=item.get("id"),
+                    quantity=quantity,
+                    total_price=item.get("total_price"),
                 )
-                for entry in new_order_items
             )
-
-            # update each product's stock to reflect the last order
-            for entry in new_order_items:
-                entry["product"].stock -= entry["qty"]
-            Product.objects.bulk_update(
-                (entry["product"] for entry in new_order_items),
-                ["stock"],
-                batch_size=100,
-            )
-
-            # update overall amount paid in this order
-            order_obj.overall_amount_paid = sum(
-                Decimal(str(item.get("total_price"))) for item in items
-            )
-            order_obj.save(update_fields=["overall_amount_paid", "updated"])
-    except ValueError:
-        # one or more items failed validation, nothing was saved
-        logger.exception("make_order rejected the cart for user %s", request.user.pk)
-        message = "Something went wrong. Your order could not be initiated."
-        msg_type = "danger"
-        context = {"type": msg_type, "message": message}
+        order_obj = checkout(
+            actor=request.user,
+            request_key=_posted_request_key(request),
+            lines=sale_lines,
+        )
+    except ValidationError as error:
+        logger.info(
+            "make_order rejected a cart for user %s: %s",
+            request.user.pk,
+            error.messages,
+        )
+        message = "The sale could not be completed: " + "; ".join(error.messages)
+        context = {"type": "danger", "message": message}
         return render(request, "core/orders/order_made.html", context)
-    except Exception:
-        # if anything goes wrong, all changes will be reversed.
+    except DatabaseError:
         logger.exception("make_order failed for user %s", request.user.pk)
-        message = "Your order was not successfully. Try again at a later time."
-        msg_type = "danger"
-        context = {"type": msg_type, "message": message}
+        message = "The sale could not be completed. Try again."
+        context = {"type": "danger", "message": message}
         return render(request, "core/orders/order_made.html", context)
 
     # order was successful
@@ -1282,29 +1439,45 @@ def print_order_pdf(request, order_id, order_number):
 
 
 def report_ledger_rows(orders_qs):
-    """The per-receipt money columns the reports ledger shows.
-
-    Cost and profit come from the current catalogue because OrderItem keeps no
-    snapshot of what a line cost at the time it sold.
-    """
+    """The per-receipt money columns, using frozen cost snapshots."""
     lines = OrderItem.objects.filter(order=OuterRef("pk"))
     return (
         orders_qs.select_related("user")
         .annotate(
             items_count=Count("orderitem"),
             units=Sum("orderitem__qty_bought"),
-            cost_outlay=Sum(
-                ExpressionWrapper(
-                    F("orderitem__qty_bought") * F("orderitem__product__cost"),
-                    output_field=MONEY_FIELD,
-                )
+            cost_outlay=Sum("orderitem__cost_amount"),
+            actual_cost_outlay=Sum(
+                "orderitem__cost_amount",
+                filter=Q(orderitem__cost_is_estimated=False),
+            ),
+            estimated_cost_outlay=Sum(
+                "orderitem__cost_amount",
+                filter=Q(orderitem__cost_is_estimated=True),
             ),
             line_profit=Sum(
                 ExpressionWrapper(
-                    F("orderitem__qty_bought")
-                    * (F("orderitem__product__price") - F("orderitem__product__cost")),
+                    F("orderitem__paid_amount") - F("orderitem__cost_amount"),
                     output_field=MONEY_FIELD,
                 )
+            ),
+            actual_line_profit=Sum(
+                ExpressionWrapper(
+                    F("orderitem__paid_amount") - F("orderitem__cost_amount"),
+                    output_field=MONEY_FIELD,
+                ),
+                filter=Q(orderitem__cost_is_estimated=False),
+            ),
+            estimated_line_profit=Sum(
+                ExpressionWrapper(
+                    F("orderitem__paid_amount") - F("orderitem__cost_amount"),
+                    output_field=MONEY_FIELD,
+                ),
+                filter=Q(orderitem__cost_is_estimated=True),
+            ),
+            estimated_lines=Count(
+                "orderitem",
+                filter=Q(orderitem__cost_is_estimated=True),
             ),
             first_item=Subquery(
                 lines.order_by("product__name").values("product__name")[:1]
@@ -1389,23 +1562,53 @@ def sales_report_csv(request):
 
     writer = csv.writer(response)
     writer.writerow(
-        ["S/No", "Receipt", "Date", "Time", "Cashier", "Units", "Cost", "Total", "Profit"]
+        [
+            "S/No",
+            "Receipt",
+            "Date",
+            "Time",
+            "Cashier",
+            "Units",
+            "Actual Cost",
+            "Estimated Cost",
+            "Revenue",
+            "Actual Profit",
+            "Estimated Profit",
+            "Estimated Lines",
+        ]
     )
     for number, order in enumerate(
-        report_ledger_queryset(rng, q).iterator(), start=1
+        report_ledger_queryset(rng, q)
+        .values(
+            "code",
+            "created",
+            "user__username",
+            "units",
+            "actual_cost_outlay",
+            "estimated_cost_outlay",
+            "overall_amount_paid",
+            "actual_line_profit",
+            "estimated_line_profit",
+            "estimated_lines",
+        )
+        .iterator(),
+        start=1,
     ):
-        local_created = timezone.localtime(order.created)
+        local_created = timezone.localtime(order["created"])
         writer.writerow(
             [
                 number,
-                order.code,
+                order["code"],
                 f"{local_created:%Y-%m-%d}",
                 f"{local_created:%H:%M:%S}",
-                order.user.username,
-                order.units or 0,
-                order.cost_outlay or Decimal("0.00"),
-                order.overall_amount_paid,
-                order.line_profit or Decimal("0.00"),
+                order["user__username"],
+                order["units"] or 0,
+                order["actual_cost_outlay"] or Decimal("0.00"),
+                order["estimated_cost_outlay"] or Decimal("0.00"),
+                order["overall_amount_paid"],
+                order["actual_line_profit"] or Decimal("0.00"),
+                order["estimated_line_profit"] or Decimal("0.00"),
+                order["estimated_lines"],
             ]
         )
     return response

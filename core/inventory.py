@@ -301,23 +301,33 @@ def receive_stock(
 
         quantities = {product_id: 0 for product_id in product_ids}
         last_cost = {}
+        last_price = {}
+        price_in_force = {}
         batches = []
         estimated = source != StockReceiptSource.PURCHASE
         for line_number, line in enumerate(lines, start=1):
             product = products[line.product_id]
             quantities[line.product_id] += line.quantity
             last_cost[line.product_id] = line.unit_cost
-            batches.append(
-                StockBatch(
-                    receipt=receipt,
-                    product=product,
-                    line_number=line_number,
-                    quantity_received=line.quantity,
-                    quantity_remaining=line.quantity,
-                    unit_cost=line.unit_cost,
-                    cost_is_estimated=estimated,
-                )
+            batch = StockBatch(
+                receipt=receipt,
+                product=product,
+                line_number=line_number,
+                quantity_received=line.quantity,
+                quantity_remaining=line.quantity,
+                unit_cost=line.unit_cost,
+                cost_is_estimated=estimated,
             )
+            if line.selling_price is not None:
+                # "the price this line found" is the price the *previous line of
+                # this product* left behind, not the one read at the top of the
+                # transaction: the trail has to chain, or a two-line re-price
+                # reports the same starting price twice.
+                batch.price_before = price_in_force.get(line.product_id, product.price)
+                batch.price_applied = line.selling_price
+                price_in_force[line.product_id] = line.selling_price
+                last_price[line.product_id] = line.selling_price
+            batches.append(batch)
         StockBatch.objects.bulk_create(batches)
 
         for product_id, product in products.items():
@@ -327,10 +337,21 @@ def receive_stock(
             product.stock = new_stock
             if source == StockReceiptSource.PURCHASE:
                 product.cost = last_cost[product_id]
+            # unlike cost, price applies from every source: an owner who typed a
+            # price on an OPENING or ADJUSTMENT line meant the price, not the cost.
+            if product_id in last_price:
+                product.price = last_price[product_id]
             product.updated = timezone.now()
+        # "price" joins the list only when some line carried one. When it does,
+        # bulk_update also rewrites the stored price for products this receipt
+        # did not re-price -- the row locks are held from the read to here, so
+        # that write is the value that was already in the column.
+        changed_fields = ["stock", "cost", "updated"]
+        if last_price:
+            changed_fields.append("price")
         Product.objects.bulk_update(
             products.values(),
-            ["stock", "cost", "updated"],
+            changed_fields,
             batch_size=len(products),
         )
         return receipt

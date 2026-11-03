@@ -73,8 +73,12 @@ class ReceiptPricingTestCase(BatchUiTestCase):
 
     def setUp(self):
         super().setUp()
+        # stock 0, not 3: receive_stock runs _assert_product_stock on every
+        # product a line names, and a product whose stock column disagrees with
+        # the batches it has (here: none) is refused as drift. Only a shelf count
+        # of zero with no batches is bookable without first booking an opening.
         self.bottle = Product.objects.create(
-            name="Bottle Gargle", sku="BTL01", stock=3,
+            name="Bottle Gargle", sku="BTL01", stock=0,
             cost=Decimal("4.00"), price=Decimal("7.50"),
             profit_rate=Decimal("0.47"),
         )
@@ -198,6 +202,117 @@ class SellingPriceValidationTests(ReceiptPricingTestCase):
             _normalize(lines)
         self.assertIn("500", caught.exception.messages[0])
         self.assertEqual(self.booked_receipts().count(), 0)
+
+
+class PriceWriteTests(ReceiptPricingTestCase):
+    def test_three_lines_book_one_receipt_three_batches_and_move_three_shelf_counts(self):
+        balm = self.product
+        receipt = self.book(
+            [
+                ReceiptLine(balm.pk, 4, Decimal("10.00")),
+                ReceiptLine(self.bottle.pk, 6, Decimal("5.00"), Decimal("9.00")),
+                ReceiptLine(balm.pk, 1, Decimal("11.00")),
+            ]
+        )
+        self.assertEqual(self.booked_receipts().count(), 1)
+        batches = list(StockBatch.objects.filter(receipt=receipt).order_by("line_number"))
+        self.assertEqual([b.line_number for b in batches], [1, 2, 3])
+        self.assertEqual([b.quantity_received for b in batches], [4, 6, 1])
+        balm.refresh_from_db()
+        self.bottle.refresh_from_db()
+        self.assertEqual((balm.stock, balm.cost), (5, Decimal("11.00")))
+        self.assertEqual((self.bottle.stock, self.bottle.price), (6, Decimal("9.00")))
+
+    def test_a_priceless_line_leaves_both_trail_columns_null(self):
+        receipt = self.book([ReceiptLine(self.product.pk, 4, Decimal("10.00"))])
+        batch = StockBatch.objects.get(receipt=receipt)
+        self.assertIsNone(batch.price_before)
+        self.assertIsNone(batch.price_applied)
+        self.product.refresh_from_db()
+        self.assertEqual(self.product.price, Decimal("18.00"))
+
+    def test_a_priced_line_writes_the_price_and_chains_the_trail(self):
+        receipt = self.book(
+            [ReceiptLine(self.product.pk, 4, Decimal("10.00"), Decimal("20.00"))]
+        )
+        batch = StockBatch.objects.get(receipt=receipt)
+        self.assertEqual(batch.price_before, Decimal("18.00"))
+        self.assertEqual(batch.price_applied, Decimal("20.00"))
+        self.product.refresh_from_db()
+        self.assertEqual(self.product.price, Decimal("20.00"))
+
+    def test_the_second_priced_line_of_a_product_starts_where_the_first_ended(self):
+        receipt = self.book(
+            [
+                ReceiptLine(self.product.pk, 2, Decimal("10.00"), Decimal("20.00")),
+                ReceiptLine(self.product.pk, 3, Decimal("12.00"), Decimal("25.00")),
+            ]
+        )
+        first, second = StockBatch.objects.filter(receipt=receipt).order_by("line_number")
+        self.assertEqual(
+            (first.price_before, first.price_applied), (Decimal("18.00"), Decimal("20.00"))
+        )
+        self.assertEqual(
+            (second.price_before, second.price_applied), (Decimal("20.00"), Decimal("25.00"))
+        )
+        self.product.refresh_from_db()
+        self.assertEqual((self.product.price, self.product.cost), (Decimal("25.00"), Decimal("12.00")))
+
+    def test_a_priced_line_leaves_unpriced_products_prices_alone(self):
+        self.book(
+            [
+                ReceiptLine(self.product.pk, 2, Decimal("10.00"), Decimal("22.00")),
+                ReceiptLine(self.bottle.pk, 2, Decimal("5.00")),
+            ]
+        )
+        self.bottle.refresh_from_db()
+        self.assertEqual(self.bottle.price, Decimal("7.50"))
+
+    def test_the_applied_price_is_the_one_checkout_charges(self):
+        self.book([ReceiptLine(self.product.pk, 4, Decimal("10.00"), Decimal("20.00"))])
+        # the cart still holds the OLD price: the register is refused, not re-priced
+        with self.assertRaises(ValidationError) as caught:
+            checkout(
+                actor=self.admin,
+                request_key=uuid.uuid4(),
+                lines=[SaleLine(self.product.pk, 2, Decimal("36.00"))],
+            )
+        self.assertIn("The cart price changed", str(caught.exception))
+        checkout(
+            actor=self.admin,
+            request_key=uuid.uuid4(),
+            lines=[SaleLine(self.product.pk, 2, Decimal("40.00"))],
+        )
+
+    def test_one_bad_line_among_three_leaves_no_receipt_no_batch_and_no_price(self):
+        self.product.refresh_from_db()
+        before = (StockReceipt.objects.count(), StockBatch.objects.count(), self.product.price)
+        with self.assertRaises(ValidationError):
+            self.book(
+                [
+                    ReceiptLine(self.product.pk, 4, Decimal("10.00"), Decimal("20.00")),
+                    ReceiptLine(self.bottle.pk, 6, Decimal("5.00")),
+                    ReceiptLine(self.product.pk, 1, Decimal("11.00"), Decimal("0.00")),
+                ]
+            )
+        self.product.refresh_from_db()
+        self.assertEqual(
+            before, (StockReceipt.objects.count(), StockBatch.objects.count(), self.product.price)
+        )
+
+    def test_a_drift_on_the_third_product_refuses_the_whole_receipt(self):
+        Product.objects.filter(pk=self.bottle.pk).update(stock=99)
+        with self.assertRaises(ValidationError) as caught:
+            self.book(
+                [
+                    ReceiptLine(self.product.pk, 4, Decimal("10.00")),
+                    ReceiptLine(self.bottle.pk, 6, Decimal("5.00"), Decimal("9.00")),
+                ]
+            )
+        self.assertIn(self.bottle.name, str(caught.exception))
+        self.assertEqual(self.booked_receipts().count(), 0)
+        self.product.refresh_from_db()
+        self.assertEqual(self.product.price, Decimal("18.00"))
 
 
 class ReceiptProductSearchTests(ReceiptPricingTestCase):

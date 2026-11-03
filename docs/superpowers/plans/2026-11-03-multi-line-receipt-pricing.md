@@ -171,8 +171,13 @@ class ReceiptPricingTestCase(BatchUiTestCase):
 
     def setUp(self):
         super().setUp()
+        # stock 0, not 3: receive_stock runs _assert_product_stock on every
+        # product a line names, and a product whose stock column disagrees with
+        # the batches it has (here: none) is refused as drift. Only a shelf count
+        # of zero with no batches is bookable without first booking an opening.
+        # Corrected while executing Task 3, which failed on exactly this.
         self.bottle = Product.objects.create(
-            name="Bottle Gargle", sku="BTL01", stock=3,
+            name="Bottle Gargle", sku="BTL01", stock=0,
             cost=Decimal("4.00"), price=Decimal("7.50"),
             profit_rate=Decimal("0.47"),
         )
@@ -506,7 +511,7 @@ class PriceWriteTests(ReceiptPricingTestCase):
         balm.refresh_from_db()
         self.bottle.refresh_from_db()
         self.assertEqual((balm.stock, balm.cost), (5, Decimal("11.00")))
-        self.assertEqual((self.bottle.stock, self.bottle.price), (9, Decimal("9.00")))
+        self.assertEqual((self.bottle.stock, self.bottle.price), (6, Decimal("9.00")))
 
     def test_a_priceless_line_leaves_both_trail_columns_null(self):
         receipt = self.book([ReceiptLine(self.product.pk, 4, Decimal("10.00"))])
@@ -1629,7 +1634,7 @@ class ReceivePostTests(ReceiptPricingTestCase):
         self.post(rows, key=key)
         self.post(rows, key=key)
         self.bottle.refresh_from_db()
-        self.assertEqual((self.bottle.stock, StockBatch.objects.count()), (9, 1))
+        self.assertEqual((self.bottle.stock, StockBatch.objects.count()), (6, 1))
 
     def test_a_drifted_product_refuses_the_whole_delivery_and_says_which(self):
         Product.objects.filter(pk=self.bottle.pk).update(stock=99)
@@ -2432,7 +2437,7 @@ class RepriceThenSellTests(ReceiptPricingTestCase):
         )
         self.product.refresh_from_db()
         self.bottle.refresh_from_db()
-        self.assertEqual((self.product.stock, self.bottle.stock), (8, 7))
+        self.assertEqual((self.product.stock, self.bottle.stock), (8, 4))
 
     def test_the_invariant_survives_a_reprice(self):
         """check_inventory's own rule: remaining == received + adjusted - sold.

@@ -16,6 +16,7 @@ from django.db.models import (
     F,
     IntegerField,
     OuterRef,
+    Q,
     Subquery,
     Sum,
 )
@@ -34,6 +35,10 @@ from utils import is_admin  # same helper core/views.py uses
 
 # quantity x unit cost, with room for the largest receipt the backend accepts.
 BATCH_VALUE = DecimalField(max_digits=24, decimal_places=2)
+
+# the picker returns a page of options, not a catalogue: twenty is what a
+# dialog's dropdown can be scanned without the owner scrolling.
+RECEIPT_SEARCH_RESULTS = 20
 
 
 def _movement_annotations():
@@ -231,4 +236,30 @@ def stock_receipt_detail(request, receipt_id):
                 (b.remaining_value for b in batches), Decimal("0.00")
             ),
         },
+    )
+
+
+@login_required
+@require_GET
+@user_passes_test(is_admin)
+def receipt_product_options(request):
+    """The receipt dialog's picker: selectable options, never a ledger row.
+
+    ``load_products`` is not reusable -- it renders table rows for the ledger.
+    The filter is copied from the one the ledger itself runs
+    (core/views.py:1163-1167) so a name and a code search identically in both,
+    and an empty term still answers (the dialog offers something to click).
+    """
+    term = request.GET.get("q", "").strip()
+    products = Product.objects.all()
+    if term:
+        products = products.filter(
+            Q(name__icontains=term) | Q(sku__icontains=term)
+        ).order_by("name")
+    else:
+        products = products.order_by("name")
+    return render(
+        request,
+        "core/products/partials/receipt_product_options.html",
+        {"products": products[:RECEIPT_SEARCH_RESULTS], "term": term},
     )

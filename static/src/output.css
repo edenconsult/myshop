@@ -5087,6 +5087,10 @@ select {
   background-color: rgb(5 150 105 / var(--tw-bg-opacity));
 }
 
+:is(.dark .dark\:hover\:bg-emerald-950\/40:hover) {
+  background-color: rgb(2 44 34 / 0.4);
+}
+
 :is(.dark .dark\:hover\:bg-emerald-950\/60:hover) {
   background-color: rgb(2 44 34 / 0.6);
 }

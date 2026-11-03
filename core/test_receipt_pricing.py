@@ -466,3 +466,161 @@ class ReceiptDialogTests(ReceiptPricingTestCase):
         self.assertEqual(
             self.client.get(reverse("core:receipt-line-blank")).status_code, 302
         )
+
+
+class ReceivePostTests(ReceiptPricingTestCase):
+    def url(self):
+        return reverse("core:receive-stock-question")
+
+    def post(self, rows, *, key=None, **header):
+        """rows: a list of (product_id, units, unit_cost, selling_price) tuples."""
+        payload = {
+            "line_product_id[]": [str(r[0]) for r in rows],
+            "line_units[]": [str(r[1]) for r in rows],
+            "line_unit_cost[]": [str(r[2]) for r in rows],
+            "line_selling_price[]": [("" if r[3] is None else str(r[3])) for r in rows],
+            "request_key": str(key or uuid.uuid4()),
+        }
+        payload.update(header)
+        return self.client.post(self.url(), payload)
+
+    def test_three_rows_book_one_receipt_with_three_lines(self):
+        response = self.post([
+            (self.product.pk, 4, "10.00", None),
+            (self.bottle.pk, 6, "5.00", "9.00"),
+            (self.product.pk, 1, "11.00", None),
+        ], supplier_name="Noble", external_reference="INV-9", purchased_on="2026-10-31")
+        self.assertContains(response, "The stock table behind this dialog already shows the change.")
+        receipt = self.booked_receipts().get()
+        self.assertEqual(receipt.supplier_name, "Noble")
+        self.assertEqual(receipt.purchased_on, dt.date(2026, 10, 31))
+        self.assertEqual(StockBatch.objects.filter(receipt=receipt).count(), 3)
+        self.product.refresh_from_db()
+        self.bottle.refresh_from_db()
+        self.assertEqual((self.product.stock, self.bottle.price), (5, Decimal("9.00")))
+
+    def test_a_blank_price_is_no_change_not_a_free_product(self):
+        self.post([(self.product.pk, 4, "10.00", "")])
+        self.product.refresh_from_db()
+        self.assertEqual(self.product.price, Decimal("18.00"))
+        self.assertIsNone(StockBatch.objects.get().price_applied)
+
+    def test_the_picker_search_term_is_ignored_when_booking(self):
+        """Each row's search box is name="q", so the post carries one; it must not
+        become a line, a price or anything the service sees."""
+        self.post([(self.bottle.pk, 2, "5.00", None)], q="Bot")
+        self.assertEqual(self.booked_receipts().count(), 1)
+        self.assertEqual(StockBatch.objects.count(), 1)
+
+    def test_a_row_without_a_product_is_refused_naming_its_row_number(self):
+        response = self.post([
+            (self.bottle.pk, 2, "5.00", None),
+            ("", 3, "6.00", None),
+        ])
+        self.assertContains(response, "Line 2 has no product")
+        self.assertContains(response, 'name="line_product_id[]"')
+        self.assertEqual(self.booked_receipts().count(), 0)
+
+    def test_a_product_id_that_is_not_a_stock_item_is_refused_naming_its_row(self):
+        """The service blames 'lines' as a whole for an unknown product, so the
+        view resolves the ids itself -- one query -- and can say which row."""
+        response = self.post([
+            (self.product.pk, 4, "10.00", None),
+            (uuid.uuid4(), 2, "5.00", None),
+        ])
+        self.assertContains(response, "Line 2 names a product that is no longer in the catalogue")
+        self.assertEqual(self.booked_receipts().count(), 0)
+        self.product.refresh_from_db()
+        self.assertEqual(self.product.stock, 0)
+
+    def test_an_over_cap_price_is_refused_naming_its_row_number(self):
+        response = self.post([(self.product.pk, 4, "10.00", "10000.00")])
+        self.assertContains(response, "Line 1 cannot sell above")
+        self.assertContains(response, str(MAX_SELLING_PRICE))
+        self.assertEqual(self.booked_receipts().count(), 0)
+
+    def test_units_over_the_per_line_limit_are_refused_naming_the_row(self):
+        response = self.post([(self.product.pk, 100001, "10.00", None)])
+        self.assertContains(response, "Line 1 takes between 1 and")
+        self.assertEqual(self.booked_receipts().count(), 0)
+
+    def test_arrays_of_different_lengths_are_refused_before_the_service_runs(self):
+        response = self.client.post(self.url(), {
+            "line_product_id[]": [str(self.product.pk), str(self.bottle.pk)],
+            "line_units[]": ["4"],
+            "line_unit_cost[]": ["10.00", "5.00"],
+            "line_selling_price[]": ["", ""],
+            "request_key": str(uuid.uuid4()),
+        })
+        self.assertContains(response, "incomplete")
+        self.assertEqual(self.booked_receipts().count(), 0)
+
+    def test_more_than_fifty_rows_is_refused_at_the_view(self):
+        rows = [(self.bottle.pk, 1, "5.00", None)] * 51
+        response = self.post(rows)
+        self.assertContains(response, "50")
+        self.assertEqual(self.booked_receipts().count(), 0)
+
+    def test_a_failed_post_returns_the_dialog_with_every_line_still_filled(self):
+        key = str(uuid.uuid4())
+        response = self.post([
+            (self.product.pk, 4, "10.00", "20.00"),
+            (self.bottle.pk, 6, "5.00", "0.00"),
+        ], key=key)
+        html = response.content.decode()
+        self.assertIn('value="10.00"', html)
+        self.assertIn('value="20.00"', html)
+        # the row partial prints a chosen name as text, never as an input value
+        self.assertIn("Shea Repair Balm", html)
+        self.assertIn("Bottle Gargle", html)
+        self.assertIn('placeholder="no change"', html)
+        self.assertContains(response, "Nothing was saved")
+        self.assertContains(response, "Line 2: selling price")
+        self.assertNotContains(response, "Reopen the stock dialog")
+
+    def test_a_failed_post_keeps_the_request_key_and_a_corrected_resubmission_books_once(self):
+        key = str(uuid.uuid4())
+        self.post([(self.product.pk, 4, "10.00", "0.00")], key=key)
+        response = self.client.post(
+            self.url(),
+            {
+                "line_product_id[]": [str(self.product.pk)],
+                "line_units[]": ["4"],
+                "line_unit_cost[]": ["10.00"],
+                "line_selling_price[]": ["20.00"],
+                "request_key": key,
+            },
+        )
+        self.assertContains(response, "already shows the change")
+        self.assertEqual(self.booked_receipts().count(), 1)
+        self.assertEqual(StockBatch.objects.count(), 1)
+
+    def test_replaying_an_identical_post_adds_stock_once(self):
+        key = uuid.uuid4()
+        rows = [(self.bottle.pk, 6, "5.00", "9.00")]
+        self.post(rows, key=key)
+        self.post(rows, key=key)
+        self.bottle.refresh_from_db()
+        self.assertEqual((self.bottle.stock, StockBatch.objects.count()), (6, 1))
+
+    def test_a_drifted_product_refuses_the_whole_delivery_and_says_which(self):
+        Product.objects.filter(pk=self.bottle.pk).update(stock=99)
+        response = self.post([
+            (self.product.pk, 4, "10.00", "20.00"),
+            (self.bottle.pk, 6, "5.00", "9.00"),
+        ])
+        self.assertContains(response, "Bottle Gargle")
+        self.product.refresh_from_db()
+        self.assertEqual(self.product.price, Decimal("18.00"))
+        self.assertEqual(self.booked_receipts().count(), 0)
+
+    def test_the_cashier_cannot_book_a_delivery(self):
+        self.client.force_login(self.cashier)
+        response = self.post([(self.bottle.pk, 6, "5.00", "9.00")])
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(self.booked_receipts().count(), 0)
+
+    def test_a_malformed_purchase_date_is_refused_with_the_dialog_intact(self):
+        response = self.post([(self.bottle.pk, 6, "5.00", None)], purchased_on="31-10-2026")
+        self.assertContains(response, "purchase date")
+        self.assertContains(response, 'name="line_product_id[]"')

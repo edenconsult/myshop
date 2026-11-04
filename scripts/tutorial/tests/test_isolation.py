@@ -12,6 +12,7 @@ def scratch(**overrides):
         "CELERY_BROKER_URL": "redis://127.0.0.1:6379/15",
         "CELERY_RESULT_BACKEND": "redis://127.0.0.1:6379/15",
         "CELERY_TASK_DEFAULT_QUEUE": "tutorial",
+        "MEDIA_ROOT": f"C:/shop/media/{isolation.DEMO_MEDIA_FOLDER}",
     }
     return SimpleNamespace(**{**base, **overrides})
 
@@ -49,6 +50,17 @@ class AssertIsolatedTests(SimpleTestCase):
 
     def test_accepts_the_base_url_it_publishes(self):
         isolation.assert_isolated(scratch(), base_url=isolation.DEMO_BASE_URL)
+
+    def test_names_the_shops_media_folder_as_a_problem(self):
+        """The guard is what makes the shim's MEDIA_ROOT override a requirement
+        rather than a preference: a demo upload that lands in media/products is a
+        write into the shop's own pictures."""
+        with self.assertRaisesRegex(isolation.NotScratchInstall, "media"):
+            isolation.assert_isolated(scratch(MEDIA_ROOT="C:/shop/media"))
+
+    def test_names_a_missing_media_folder_as_a_problem(self):
+        with self.assertRaisesRegex(isolation.NotScratchInstall, "media"):
+            isolation.assert_isolated(scratch(MEDIA_ROOT=""))
 
     def test_refuses_an_unparsable_base_url(self):
         with self.assertRaisesRegex(isolation.NotScratchInstall, "base URL"):

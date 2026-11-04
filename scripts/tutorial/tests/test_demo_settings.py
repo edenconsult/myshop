@@ -52,3 +52,11 @@ class DemoSettingsTests(SimpleTestCase):
             demo.is_relative_to(live),
             "the scratch media folder stays under media/, which .gitignore already covers",
         )
+
+    def test_the_guard_passes_the_install_it_describes(self):
+        """The shim and the guard move independently. If one changes a coordinate
+        and the other does not, every entry point refuses to run — so the refusal
+        has to be proven against the real settings object, not only the fakes."""
+        from scripts.tutorial import isolation
+
+        isolation.assert_isolated(self.demo_settings)

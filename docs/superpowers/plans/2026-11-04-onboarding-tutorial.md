@@ -20,6 +20,7 @@
 - Every entry point that touches data calls `isolation.assert_isolated()` first. It reads **resolved settings**, never the environment, because `myshopproject/settings.py:13` runs `load_dotenv(BASE_DIR / ".env", override=True)` and `.env` carries `POSTGRES_DB` and both `CELERY_*` URLs.
 - The only two sanctioned ways to run this lane's modules: `DJANGO_SETTINGS_MODULE=scripts.tutorial.demo_settings .venv/Scripts/python.exe -m scripts.tutorial.<module> …` (always `-m`, from the repo root — a direct file path breaks the `scripts.tutorial` imports) and `.venv/Scripts/python.exe manage.py <cmd> --settings=scripts.tutorial.demo_settings …`. `_guard()` refuses if `DJANGO_SETTINGS_MODULE` is not exactly the shim and never defaults it, so no module can guess its way onto the shop's database.
 - Recipes write through the real services (`core.checkout.checkout`, `core.inventory.receive_stock`, `core.inventory.adjust_batch`). The only sanctioned bypass is `QuerySet.update()`, and only for the two states the services refuse to produce: `out-of-balance` and `after-hours`.
+- Recipes write files as well as rows: `catalogue()` puts the tutorial's own product photo under `MEDIA_ROOT`. Every test that calls a recipe therefore lives in `scripts/tutorial/tests/test_seed_recipes.py`, which redirects `MEDIA_ROOT` to a temp folder in `setUpModule` — or, for the one module created later (Task 22's `test_receipt_preview.py`), repeats that redirect. The lane's test command runs on the **live** settings, whose `MEDIA_ROOT` is the shop's real `media/`; a new test module that seeds without the redirect drops a demo picture next to the shop's product photos.
 - Captions describe what is in the frame; steps instruct. Currency is written as the screen writes it (`GH₵`); where the app prints `GHs`, quote it verbatim and add a note — never silently correct it.
 - A feature with no UI is stated as an absence in that chapter's "Notes & limits". It never becomes a step.
 - PNGs are committed alongside the Markdown (owner decision 2026-11-03).
@@ -77,7 +78,7 @@ The exit condition is a proof, not a promise: the Receive Delivery dialog captur
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: constants `SCRATCH_DB`, `SHIM_MODULE`, `DEMO_HOST`, `SCRATCH_PORT`, `BROKER_DB_INDEX`, `TUTORIAL_QUEUE`, `DEMO_BASE_URL`; exception `NotScratchInstall`; `assert_isolated(settings, base_url=None) -> None`; settings module `scripts.tutorial.demo_settings` with `DATABASES["default"]["NAME"] == "myshop_tutorial"` (in a dict of its own, never by mutating the live one), `CELERY_TASK_DEFAULT_QUEUE == "tutorial"`, both Celery URLs ending `/15`, and `MEDIA_ROOT` pointing one folder below the shop's `media/`.
+- Produces: constants `SCRATCH_DB`, `SHIM_MODULE`, `DEMO_HOST`, `SCRATCH_PORT`, `BROKER_DB_INDEX`, `TUTORIAL_QUEUE`, `DEMO_MEDIA_FOLDER`, `DEMO_BASE_URL`; exception `NotScratchInstall`; `assert_isolated(settings, base_url=None) -> None`; settings module `scripts.tutorial.demo_settings` with `DATABASES["default"]["NAME"] == "myshop_tutorial"` (in a dict of its own, never by mutating the live one), `CELERY_TASK_DEFAULT_QUEUE == "tutorial"`, both Celery URLs ending `/15`, and `MEDIA_ROOT` one folder below the shop's `media/`. The guard checks all five, so the shim cannot silently drop a coordinate.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -98,6 +99,7 @@ def scratch(**overrides):
         "CELERY_BROKER_URL": "redis://127.0.0.1:6379/15",
         "CELERY_RESULT_BACKEND": "redis://127.0.0.1:6379/15",
         "CELERY_TASK_DEFAULT_QUEUE": "tutorial",
+        "MEDIA_ROOT": f"C:/shop/media/{isolation.DEMO_MEDIA_FOLDER}",
     }
     return SimpleNamespace(**{**base, **overrides})
 
@@ -135,6 +137,17 @@ class AssertIsolatedTests(SimpleTestCase):
 
     def test_accepts_the_base_url_it_publishes(self):
         isolation.assert_isolated(scratch(), base_url=isolation.DEMO_BASE_URL)
+
+    def test_names_the_shops_media_folder_as_a_problem(self):
+        """The guard is what makes the shim's MEDIA_ROOT override a requirement
+        rather than a preference: a demo upload that lands in media/products is a
+        write into the shop's own pictures."""
+        with self.assertRaisesRegex(isolation.NotScratchInstall, "media"):
+            isolation.assert_isolated(scratch(MEDIA_ROOT="C:/shop/media"))
+
+    def test_names_a_missing_media_folder_as_a_problem(self):
+        with self.assertRaisesRegex(isolation.NotScratchInstall, "media"):
+            isolation.assert_isolated(scratch(MEDIA_ROOT=""))
 
     def test_refuses_an_unparsable_base_url(self):
         with self.assertRaisesRegex(isolation.NotScratchInstall, "base URL"):
@@ -211,12 +224,20 @@ class DemoSettingsTests(SimpleTestCase):
             demo.is_relative_to(live),
             "the scratch media folder stays under media/, which .gitignore already covers",
         )
+
+    def test_the_guard_passes_the_install_it_describes(self):
+        """The shim and the guard move independently. If one changes a coordinate
+        and the other does not, every entry point refuses to run — so the refusal
+        has to be proven against the real settings object, not only the fakes."""
+        from scripts.tutorial import isolation
+
+        isolation.assert_isolated(self.demo_settings)
 ```
 
 - [ ] **Step 2: Run them to watch them fail**
 
 Run: `.venv/Scripts/python.exe manage.py test --keepdb scripts.tutorial > /tmp/p0.log 2>&1; echo "exit=$?"`
-Expected: `exit=1`, `ModuleNotFoundError: No module named 'scripts'` (the package does not exist yet).
+Expected: `exit=1`. `scripts/` already exists (it holds the other lane's PowerShell) and Python treats it as a namespace package, so the failure is `ImportError: cannot import name 'isolation' from 'scripts.tutorial'` — not `ModuleNotFoundError: No module named 'scripts'`.
 
 - [ ] **Step 3: Create the packages and write `isolation.py`**
 
@@ -238,6 +259,7 @@ that trusted the environment would have run its migrations against the shop's
 own books.
 """
 
+from pathlib import Path
 from urllib.parse import urlsplit
 
 SCRATCH_DB = "myshop_tutorial"
@@ -247,6 +269,7 @@ SCRATCH_PORT = 8010
 DEMO_BASE_URL = f"http://{DEMO_HOST}:{SCRATCH_PORT}"
 BROKER_DB_INDEX = 15
 TUTORIAL_QUEUE = "tutorial"
+DEMO_MEDIA_FOLDER = "_tutorial"
 
 
 class NotScratchInstall(Exception):
@@ -273,6 +296,11 @@ def assert_isolated(settings, base_url=None):
     queue = getattr(settings, "CELERY_TASK_DEFAULT_QUEUE", "celery")
     if queue != TUTORIAL_QUEUE:
         problems.append(f"task queue is {queue!r}, expected the demo {TUTORIAL_QUEUE!r}")
+    media = str(getattr(settings, "MEDIA_ROOT", ""))
+    if Path(media).name != DEMO_MEDIA_FOLDER:
+        problems.append(
+            f"media root is {media!r}, expected a .../{DEMO_MEDIA_FOLDER} folder of its own"
+        )
     if base_url is not None and not _is_scratch_server(base_url):
         problems.append(
             f"base URL {base_url!r} is not the scratch server on port {SCRATCH_PORT}"
@@ -309,6 +337,7 @@ from myshopproject.settings import *  # noqa: F403
 
 from scripts.tutorial.isolation import (
     BROKER_DB_INDEX,
+    DEMO_MEDIA_FOLDER,
     SCRATCH_DB,
     TUTORIAL_QUEUE,
 )
@@ -328,13 +357,13 @@ CELERY_TASK_DEFAULT_QUEUE = TUTORIAL_QUEUE
 
 # One folder below the shop's own photos, not beside them: media/ is git-ignored as
 # a whole, so the scratch tree stays untracked without touching .gitignore.
-MEDIA_ROOT = str(Path(MEDIA_ROOT) / "_tutorial")  # noqa: F405
+MEDIA_ROOT = str(Path(MEDIA_ROOT) / DEMO_MEDIA_FOLDER)  # noqa: F405
 ```
 
 - [ ] **Step 5: Run the tests to green**
 
 Run: `.venv/Scripts/python.exe manage.py test --keepdb scripts.tutorial > /tmp/p0.log 2>&1; echo "exit=$?"`
-Expected: `exit=0`, `Ran 17 tests` (eleven guard tests and six shim tests).
+Expected: `exit=0`, `Ran 20 tests` (thirteen guard tests and seven shim tests).
 
 - [ ] **Step 6: Commit**
 
@@ -576,11 +605,32 @@ git commit -m "Add the chapter anatomy every onboarding chapter must follow"
 
 ```python
 import tempfile
+from pathlib import Path
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
 
 from scripts.tutorial import seed_demo
+
+_media = None
+_override = None
+
+
+def setUpModule():
+    """Every class in this module seeds, and the catalogue writes the tutorial's own
+    product photo. `manage.py test` runs on the live settings, whose MEDIA_ROOT is the
+    shop's real `media/` — so the folder is redirected once for the whole module, which
+    also covers the classes Tasks 12–28 append here. Verified on this tree: the override
+    is still applied in a second class of the same module."""
+    global _media, _override
+    _media = tempfile.TemporaryDirectory(prefix="tutorial-media-")
+    _override = override_settings(MEDIA_ROOT=_media.name)
+    _override.enable()
+
+
+def tearDownModule():
+    _override.disable()
+    _media.cleanup()
 
 
 class PeopleRecipeTests(TestCase):
@@ -826,16 +876,8 @@ git commit -m "Seed the demo people through the real account model"
 
 ```python
 class CatalogueRecipeTests(TestCase):
-    """Every recipe test redirects `MEDIA_ROOT` into a temp folder. The catalogue
-    writes the tutorial's own photo, and a plain `manage.py test` run uses the live
-    settings — so without this the demo picture lands in the shop's `media/`."""
-
-    def setUp(self):
-        media = tempfile.TemporaryDirectory()
-        self.addCleanup(media.cleanup)
-        override = override_settings(MEDIA_ROOT=media.name)
-        override.enable()
-        self.addCleanup(override.disable)
+    """No `setUp` here: the module fixture created in Task 4 already moved
+    `MEDIA_ROOT` out of the shop's `media/` for every class in this file."""
 
     def test_every_category_is_represented(self):
         from core.models import ProductCategory
@@ -2467,7 +2509,7 @@ Add `_cashier()` beside `_owner()` from Task 5 — identical body, `username=CAS
 
 **Files:**
 - Modify: `scripts/tutorial/shoot.py` (add `render_receipt_preview()`)
-- Test: `scripts/tutorial/tests/test_receipt_preview.py`, created with the same header as `test_seed_recipes.py` — `import tempfile`, `from django.contrib.auth import get_user_model`, `from django.test import TestCase, override_settings`, `from scripts.tutorial import seed_demo, shoot`, and `from core.models import Order` — because these tests touch the database.
+- Test: `scripts/tutorial/tests/test_receipt_preview.py`, created with the same header as `test_seed_recipes.py` — `import tempfile`, `from pathlib import Path`, `from django.contrib.auth import get_user_model`, `from django.test import TestCase, override_settings`, `from scripts.tutorial import seed_demo, shoot`, and `from core.models import Order` — because these tests touch the database, and with **the same `setUpModule`/`tearDownModule` media redirect**: `catalogue()` is called here too.
 
 **Interfaces:**
 - Consumes: `seed_demo.selling()` (Task 21), `core.views.receipt_sheet_length_mm`, `settings.RECEIPT_COLOPHON_HEIGHT_MM`, `settings.COMPANY_INFO`, `static/css/receipt.css`, `core/templates/core/orders/prints/order_details.html`.

@@ -10,6 +10,7 @@ from myshopproject.settings import *  # noqa: F403
 
 from scripts.tutorial.isolation import (
     BROKER_DB_INDEX,
+    DEMO_MEDIA_FOLDER,
     SCRATCH_DB,
     TUTORIAL_QUEUE,
 )
@@ -29,4 +30,4 @@ CELERY_TASK_DEFAULT_QUEUE = TUTORIAL_QUEUE
 
 # One folder below the shop's own photos, not beside them: media/ is git-ignored as
 # a whole, so the scratch tree stays untracked without touching .gitignore.
-MEDIA_ROOT = str(Path(MEDIA_ROOT) / "_tutorial")  # noqa: F405
+MEDIA_ROOT = str(Path(MEDIA_ROOT) / DEMO_MEDIA_FOLDER)  # noqa: F405

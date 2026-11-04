@@ -7,6 +7,7 @@ that trusted the environment would have run its migrations against the shop's
 own books.
 """
 
+from pathlib import Path
 from urllib.parse import urlsplit
 
 SCRATCH_DB = "myshop_tutorial"
@@ -16,6 +17,7 @@ SCRATCH_PORT = 8010
 DEMO_BASE_URL = f"http://{DEMO_HOST}:{SCRATCH_PORT}"
 BROKER_DB_INDEX = 15
 TUTORIAL_QUEUE = "tutorial"
+DEMO_MEDIA_FOLDER = "_tutorial"
 
 
 class NotScratchInstall(Exception):
@@ -42,6 +44,11 @@ def assert_isolated(settings, base_url=None):
     queue = getattr(settings, "CELERY_TASK_DEFAULT_QUEUE", "celery")
     if queue != TUTORIAL_QUEUE:
         problems.append(f"task queue is {queue!r}, expected the demo {TUTORIAL_QUEUE!r}")
+    media = str(getattr(settings, "MEDIA_ROOT", ""))
+    if Path(media).name != DEMO_MEDIA_FOLDER:
+        problems.append(
+            f"media root is {media!r}, expected a .../{DEMO_MEDIA_FOLDER} folder of its own"
+        )
     if base_url is not None and not _is_scratch_server(base_url):
         problems.append(
             f"base URL {base_url!r} is not the scratch server on port {SCRATCH_PORT}"

@@ -56,7 +56,8 @@ class DemoSettingsTests(SimpleTestCase):
     def test_the_guard_passes_the_install_it_describes(self):
         """The shim and the guard move independently. If one changes a coordinate
         and the other does not, every entry point refuses to run — so the refusal
-        has to be proven against the real settings object, not only the fakes."""
+        has to be proven against the real settings object, not only the fakes. The
+        base URL is passed so all five coordinates are pinned, not four."""
         from scripts.tutorial import isolation
 
-        isolation.assert_isolated(self.demo_settings)
+        isolation.assert_isolated(self.demo_settings, base_url=isolation.DEMO_BASE_URL)

@@ -34,7 +34,8 @@ scripts/__init__.py                     makes scripts.tutorial importable by the
 scripts/tutorial/__init__.py            package marker
 scripts/tutorial/isolation.py           the scratch coordinates + assert_isolated() — the only
                                         module that knows what "safe to write to" means
-scripts/tutorial/demo_settings.py       settings shim: star-import, then override DB/broker/queue
+scripts/tutorial/demo_settings.py       settings shim: star-import, then override DB, broker,
+                                        queue and MEDIA_ROOT — each one a guard coordinate
 scripts/tutorial/scratchdb.py           CREATE DATABASE for the scratch name, guard first
 scripts/tutorial/run_demo_server.ps1    create + migrate + :8010 runserver + tutorial-queue worker
 scripts/tutorial/seed_demo.py           recipe registry, --reset/--list/--only CLI, the recipes the
@@ -47,6 +48,7 @@ scripts/tutorial/tests/__init__.py
 scripts/tutorial/tests/test_isolation.py
 scripts/tutorial/tests/test_demo_settings.py
 scripts/tutorial/tests/test_seed_recipes.py
+scripts/tutorial/tests/test_receipt_preview.py
 scripts/tutorial/tests/test_shoot_manifest.py
 scripts/tutorial/tests/test_verify_gates.py
 docs/onboarding/README.md               index + how to re-shoot (written in Phase 6)
@@ -78,7 +80,7 @@ The exit condition is a proof, not a promise: the Receive Delivery dialog captur
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: constants `SCRATCH_DB`, `SHIM_MODULE`, `DEMO_HOST`, `SCRATCH_PORT`, `BROKER_DB_INDEX`, `TUTORIAL_QUEUE`, `DEMO_MEDIA_FOLDER`, `DEMO_BASE_URL`; exception `NotScratchInstall`; `assert_isolated(settings, base_url=None) -> None`; settings module `scripts.tutorial.demo_settings` with `DATABASES["default"]["NAME"] == "myshop_tutorial"` (in a dict of its own, never by mutating the live one), `CELERY_TASK_DEFAULT_QUEUE == "tutorial"`, both Celery URLs ending `/15`, and `MEDIA_ROOT` one folder below the shop's `media/`. The guard checks all five, so the shim cannot silently drop a coordinate.
+- Produces: constants `SCRATCH_DB`, `SHIM_MODULE`, `DEMO_HOST`, `SCRATCH_PORT`, `BROKER_DB_INDEX`, `TUTORIAL_QUEUE`, `DEMO_MEDIA_FOLDER`, `DEMO_BASE_URL`; exception `NotScratchInstall`; `assert_isolated(settings, base_url=None) -> None`; settings module `scripts.tutorial.demo_settings` with `DATABASES["default"]["NAME"] == "myshop_tutorial"` (in a dict of its own, never by mutating the live one), `CELERY_TASK_DEFAULT_QUEUE == "tutorial"`, both Celery URLs ending `/15`, and `MEDIA_ROOT` one folder below the shop's `media/`. The guard checks all five, so the shim cannot silently drop a coordinate — the media one by its folder name, which the shim builds from that same constant.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -228,10 +230,11 @@ class DemoSettingsTests(SimpleTestCase):
     def test_the_guard_passes_the_install_it_describes(self):
         """The shim and the guard move independently. If one changes a coordinate
         and the other does not, every entry point refuses to run — so the refusal
-        has to be proven against the real settings object, not only the fakes."""
+        has to be proven against the real settings object, not only the fakes. The
+        base URL is passed so all five coordinates are pinned, not four."""
         from scripts.tutorial import isolation
 
-        isolation.assert_isolated(self.demo_settings)
+        isolation.assert_isolated(self.demo_settings, base_url=isolation.DEMO_BASE_URL)
 ```
 
 - [ ] **Step 2: Run them to watch them fail**
@@ -620,8 +623,8 @@ def setUpModule():
     """Every class in this module seeds, and the catalogue writes the tutorial's own
     product photo. `manage.py test` runs on the live settings, whose MEDIA_ROOT is the
     shop's real `media/` — so the folder is redirected once for the whole module, which
-    also covers the classes Tasks 12–28 append here. Verified on this tree: the override
-    is still applied in a second class of the same module."""
+    also covers every class the later recipe tasks append to this file. Verified on this
+    tree: the override is still applied in a second class of the same module."""
     global _media, _override
     _media = tempfile.TemporaryDirectory(prefix="tutorial-media-")
     _override = override_settings(MEDIA_ROOT=_media.name)
@@ -877,7 +880,7 @@ git commit -m "Seed the demo people through the real account model"
 ```python
 class CatalogueRecipeTests(TestCase):
     """No `setUp` here: the module fixture created in Task 4 already moved
-    `MEDIA_ROOT` out of the shop's `media/` for every class in this file."""
+    `MEDIA_ROOT` out of the shop's real `media/` for every class in this file."""
 
     def test_every_category_is_represented(self):
         from core.models import ProductCategory
@@ -910,6 +913,16 @@ class CatalogueRecipeTests(TestCase):
         self.assertTrue(Product.objects.filter(image__isnull=True).exists())
         photo = Product.objects.exclude(image__isnull=True).get()
         self.assertTrue(Path(settings.MEDIA_ROOT, photo.image.name).is_file())
+
+    def test_the_photo_helper_refuses_the_shops_own_media_root(self):
+        """The one test that does not want the module's redirect: pointing MEDIA_ROOT
+        back at the live folder must raise, not write, because a stray PNG there is
+        git-ignored and no gate ever looks at it."""
+        from myshopproject import settings as live
+
+        with override_settings(MEDIA_ROOT=live.MEDIA_ROOT):
+            with self.assertRaisesRegex(RuntimeError, "shop's own media"):
+                seed_demo._demo_photo()
 
     def test_profit_rate_follows_the_importer_formula(self):
         from core.catalog_imports import PROFIT_RATE_MAX
@@ -1011,11 +1024,23 @@ def _demo_photo() -> str:
 
     Assigning the name instead of a File object keeps upload_to from copying it a
     second time into products/products/.
+
+    The write site checks the leak condition itself rather than trusting where the
+    caller's settings came from: the shim redirects MEDIA_ROOT and the test modules
+    redirect it, but a new test module that forgot to would otherwise drop this file
+    among the shop's real product pictures, git-ignored and invisible to every gate.
     """
     from django.conf import settings
+    from myshopproject import settings as live
     from PIL import Image
 
-    folder = Path(settings.MEDIA_ROOT) / "products"
+    root = Path(settings.MEDIA_ROOT)
+    if root == Path(live.MEDIA_ROOT):
+        raise RuntimeError(
+            "refusing to write a demo photo into the shop's own media folder"
+        )
+
+    folder = root / "products"
     folder.mkdir(parents=True, exist_ok=True)
     if not (folder / "demo-photo.png").exists():
         Image.new("RGB", (240, 240), (47, 94, 79)).save(folder / "demo-photo.png")

@@ -61,3 +61,32 @@ class DemoSettingsTests(SimpleTestCase):
         from scripts.tutorial import isolation
 
         isolation.assert_isolated(self.demo_settings, base_url=isolation.DEMO_BASE_URL)
+
+    def test_puts_the_broker_where_the_celery_app_actually_looks(self):
+        """`config_from_object(..., namespace="CELERY")` reads the two broker keys
+        from the environment, and the star-import's load_dotenv(override=True) has
+        already put the shop's URL there — so overriding the module attribute alone
+        leaves a demo task in the shop's broker. Measured on this checkout: the
+        queue came through (absent from .env) and the broker did not."""
+        import os
+
+        from scripts.tutorial import isolation
+
+        for key in ("CELERY_BROKER_URL", "CELERY_RESULT_BACKEND"):
+            self.assertTrue(
+                os.environ[key].endswith(f"/{isolation.BROKER_DB_INDEX}"),
+                f"{key} in the environment is {os.environ.get(key)!r}",
+            )
+
+
+def tearDownModule():
+    """The shim rewrites the two broker keys in the environment — that is the fix it
+    exists to prove — and this process runs the rest of the suite afterwards, so the
+    shop's own values go back. Reading them from the live settings module rather than
+    hard-coding them keeps this honest if .env changes."""
+    import os
+
+    from myshopproject import settings as live
+
+    for key in ("CELERY_BROKER_URL", "CELERY_RESULT_BACKEND"):
+        os.environ[key] = str(getattr(live, key))

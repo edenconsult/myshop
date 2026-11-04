@@ -77,7 +77,7 @@ The exit condition is a proof, not a promise: the Receive Delivery dialog captur
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: constants `SCRATCH_DB`, `SHIM_MODULE`, `SCRATCH_PORT`, `BROKER_DB_INDEX`, `TUTORIAL_QUEUE`, `DEMO_BASE_URL`; exception `NotScratchInstall`; `assert_isolated(settings, base_url=None) -> None`; settings module `scripts.tutorial.demo_settings` with `DATABASES["default"]["NAME"] == "myshop_tutorial"`, `CELERY_TASK_DEFAULT_QUEUE == "tutorial"`, both Celery URLs ending `/15`.
+- Produces: constants `SCRATCH_DB`, `SHIM_MODULE`, `DEMO_HOST`, `SCRATCH_PORT`, `BROKER_DB_INDEX`, `TUTORIAL_QUEUE`, `DEMO_BASE_URL`; exception `NotScratchInstall`; `assert_isolated(settings, base_url=None) -> None`; settings module `scripts.tutorial.demo_settings` with `DATABASES["default"]["NAME"] == "myshop_tutorial"` (in a dict of its own, never by mutating the live one), `CELERY_TASK_DEFAULT_QUEUE == "tutorial"`, both Celery URLs ending `/15`, and `MEDIA_ROOT` pointing one folder below the shop's `media/`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -124,6 +124,27 @@ class AssertIsolatedTests(SimpleTestCase):
         with self.assertRaisesRegex(isolation.NotScratchInstall, "8010"):
             isolation.assert_isolated(scratch(), base_url="http://127.0.0.1:8000")
 
+    def test_names_a_lookalike_port_as_a_problem(self):
+        """A substring match would read ':8010' inside ':80100' and wave it through."""
+        with self.assertRaisesRegex(isolation.NotScratchInstall, "base URL"):
+            isolation.assert_isolated(scratch(), base_url="http://127.0.0.1:80100")
+
+    def test_names_another_host_on_the_scratch_port_as_a_problem(self):
+        with self.assertRaisesRegex(isolation.NotScratchInstall, "base URL"):
+            isolation.assert_isolated(scratch(), base_url="http://localhost:8010")
+
+    def test_accepts_the_base_url_it_publishes(self):
+        isolation.assert_isolated(scratch(), base_url=isolation.DEMO_BASE_URL)
+
+    def test_refuses_an_unparsable_base_url(self):
+        with self.assertRaisesRegex(isolation.NotScratchInstall, "base URL"):
+            isolation.assert_isolated(scratch(), base_url="127.0.0.1:8010")
+
+    def test_reports_settings_it_cannot_read_instead_of_crashing(self):
+        """A launcher that passes the wrong object must be refused, not trace-backed."""
+        with self.assertRaisesRegex(isolation.NotScratchInstall, "database"):
+            isolation.assert_isolated(SimpleNamespace())
+
     def test_a_live_database_is_refused_even_with_a_scratch_url(self):
         """The two checks are independent: a scratch port does not excuse the shop's books."""
         with self.assertRaisesRegex(isolation.NotScratchInstall, "database"):
@@ -136,6 +157,8 @@ class AssertIsolatedTests(SimpleTestCase):
 `scripts/tutorial/tests/test_demo_settings.py`:
 
 ```python
+from pathlib import Path
+
 from django.test import SimpleTestCase
 
 
@@ -165,6 +188,29 @@ class DemoSettingsTests(SimpleTestCase):
 
         self.assertEqual(self.demo_settings.INSTALLED_APPS, settings.INSTALLED_APPS)
         self.assertEqual(self.demo_settings.AUTH_USER_MODEL, settings.AUTH_USER_MODEL)
+
+    def test_does_not_rename_the_live_projects_database(self):
+        """The deviation from the plan, guarded: the star-import binds the *same*
+        dict myshopproject.settings holds, so writing
+        DATABASES["default"]["NAME"] = SCRATCH_DB would retarget the shop's own
+        connection in every process that merely imported this shim."""
+        from myshopproject import settings
+
+        self.assertIsNot(self.demo_settings.DATABASES, settings.DATABASES)
+        self.assertNotEqual(settings.DATABASES["default"]["NAME"], "myshop_tutorial")
+
+    def test_gives_demo_uploads_their_own_media_folder(self):
+        """A photo uploaded through the product dialog would otherwise be written
+        among the shop's real product pictures, next door in media/products/."""
+        from myshopproject import settings
+
+        demo = Path(self.demo_settings.MEDIA_ROOT)
+        live = Path(settings.MEDIA_ROOT)
+        self.assertNotEqual(demo, live)
+        self.assertTrue(
+            demo.is_relative_to(live),
+            "the scratch media folder stays under media/, which .gitignore already covers",
+        )
 ```
 
 - [ ] **Step 2: Run them to watch them fail**
@@ -192,10 +238,13 @@ that trusted the environment would have run its migrations against the shop's
 own books.
 """
 
+from urllib.parse import urlsplit
+
 SCRATCH_DB = "myshop_tutorial"
 SHIM_MODULE = "scripts.tutorial.demo_settings"
+DEMO_HOST = "127.0.0.1"
 SCRATCH_PORT = 8010
-DEMO_BASE_URL = f"http://127.0.0.1:{SCRATCH_PORT}"
+DEMO_BASE_URL = f"http://{DEMO_HOST}:{SCRATCH_PORT}"
 BROKER_DB_INDEX = 15
 TUTORIAL_QUEUE = "tutorial"
 
@@ -206,23 +255,43 @@ class NotScratchInstall(Exception):
 
 def assert_isolated(settings, base_url=None):
     problems = []
-    name = settings.DATABASES["default"]["NAME"]
-    if name != SCRATCH_DB:
-        problems.append(f"database is {name!r}, expected the scratch {SCRATCH_DB!r}")
+    try:
+        name = settings.DATABASES["default"]["NAME"]
+    except (AttributeError, KeyError, TypeError):
+        problems.append("database name is unreadable from these settings")
+    else:
+        if name != SCRATCH_DB:
+            problems.append(
+                f"database is {name!r}, expected the scratch {SCRATCH_DB!r}"
+            )
     for key in ("CELERY_BROKER_URL", "CELERY_RESULT_BACKEND"):
         value = str(getattr(settings, key, ""))
         if not value.endswith(f"/{BROKER_DB_INDEX}"):
-            problems.append(f"{key} shares the shop's Redis index, expected .../{BROKER_DB_INDEX}")
+            problems.append(
+                f"{key} shares the shop's Redis index, expected .../{BROKER_DB_INDEX}"
+            )
     queue = getattr(settings, "CELERY_TASK_DEFAULT_QUEUE", "celery")
     if queue != TUTORIAL_QUEUE:
         problems.append(f"task queue is {queue!r}, expected the demo {TUTORIAL_QUEUE!r}")
-    if base_url is not None and f":{SCRATCH_PORT}" not in base_url:
-        problems.append(f"base URL {base_url!r} is not the scratch server on port {SCRATCH_PORT}")
+    if base_url is not None and not _is_scratch_server(base_url):
+        problems.append(
+            f"base URL {base_url!r} is not the scratch server on port {SCRATCH_PORT}"
+        )
     if problems:
         raise NotScratchInstall(
             "not the isolated tutorial install: " + "; ".join(problems)
             + f". Run with --settings={SHIM_MODULE}."
         )
+
+
+def _is_scratch_server(base_url):
+    """Parsed, not substringed: ':8010' hides inside ':80100', and a port alone
+    never says whose server the URL points at."""
+    try:
+        target = urlsplit(base_url)
+        return (target.hostname, target.port) == (DEMO_HOST, SCRATCH_PORT)
+    except ValueError:
+        return False
 ```
 
 - [ ] **Step 4: Write `demo_settings.py`**
@@ -234,6 +303,8 @@ Star-importing the project settings runs its load_dotenv(..., override=True), so
 every override below is applied after .env has had its say and therefore wins.
 """
 
+from pathlib import Path
+
 from myshopproject.settings import *  # noqa: F403
 
 from scripts.tutorial.isolation import (
@@ -242,18 +313,28 @@ from scripts.tutorial.isolation import (
     TUTORIAL_QUEUE,
 )
 
-DATABASES["default"]["NAME"] = SCRATCH_DB  # noqa: F405
+# A new dict, not a mutation of the imported one: the star-import binds the same
+# object myshopproject.settings holds, and a test process that imports this shim
+# would otherwise rename the live connection mid-run.
+DATABASES = {  # noqa: F405
+    **DATABASES,  # noqa: F405
+    "default": {**DATABASES["default"], "NAME": SCRATCH_DB},  # noqa: F405
+}
 
 _broker = f"redis://127.0.0.1:6379/{BROKER_DB_INDEX}"
 CELERY_BROKER_URL = _broker
 CELERY_RESULT_BACKEND = _broker
 CELERY_TASK_DEFAULT_QUEUE = TUTORIAL_QUEUE
+
+# One folder below the shop's own photos, not beside them: media/ is git-ignored as
+# a whole, so the scratch tree stays untracked without touching .gitignore.
+MEDIA_ROOT = str(Path(MEDIA_ROOT) / "_tutorial")  # noqa: F405
 ```
 
 - [ ] **Step 5: Run the tests to green**
 
 Run: `.venv/Scripts/python.exe manage.py test --keepdb scripts.tutorial > /tmp/p0.log 2>&1; echo "exit=$?"`
-Expected: `exit=0`, `Ran 10 tests` (six guard tests and four shim tests).
+Expected: `exit=0`, `Ran 17 tests` (eleven guard tests and six shim tests).
 
 - [ ] **Step 6: Commit**
 
@@ -494,8 +575,10 @@ git commit -m "Add the chapter anatomy every onboarding chapter must follow"
 `scripts/tutorial/tests/test_seed_recipes.py`:
 
 ```python
+import tempfile
+
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.test import TestCase, override_settings
 
 from scripts.tutorial import seed_demo
 
@@ -743,6 +826,17 @@ git commit -m "Seed the demo people through the real account model"
 
 ```python
 class CatalogueRecipeTests(TestCase):
+    """Every recipe test redirects `MEDIA_ROOT` into a temp folder. The catalogue
+    writes the tutorial's own photo, and a plain `manage.py test` run uses the live
+    settings — so without this the demo picture lands in the shop's `media/`."""
+
+    def setUp(self):
+        media = tempfile.TemporaryDirectory()
+        self.addCleanup(media.cleanup)
+        override = override_settings(MEDIA_ROOT=media.name)
+        override.enable()
+        self.addCleanup(override.disable)
+
     def test_every_category_is_represented(self):
         from core.models import ProductCategory
 
@@ -763,14 +857,17 @@ class CatalogueRecipeTests(TestCase):
         self.assertLessEqual(low.stock, low.low_stock_threshold)
 
     def test_the_ledger_shows_both_image_states(self):
-        """One frame needs the monogram fallback, the next one needs a real photo —
-        and the photo is an existing file in media/, reused, never written."""
+        """One frame needs the monogram fallback, the next a real photo — and the
+        photo is the tutorial's own file, never one of the shop's product pictures."""
+        from django.conf import settings
+
         from core.models import Product
 
         seed_demo.catalogue()
 
         self.assertTrue(Product.objects.filter(image__isnull=True).exists())
-        self.assertTrue(Product.objects.exclude(image__isnull=True).exists())
+        photo = Product.objects.exclude(image__isnull=True).get()
+        self.assertTrue(Path(settings.MEDIA_ROOT, photo.image.name).is_file())
 
     def test_profit_rate_follows_the_importer_formula(self):
         from core.catalog_imports import PROFIT_RATE_MAX
@@ -858,22 +955,29 @@ def catalogue() -> list[object]:
     for product, sku in zip(products, DEMO_SKUS, strict=True):
         product.sku = sku
         product.save(update_fields=["sku"])
-    # one row carries a photo so the ledger shows both thumb and monogram; the file
-    # is an existing one under MEDIA_ROOT, named rather than copied, so nothing is
-    # ever written into the shop's media
-    photo = _existing_photo_name()
-    if photo:
-        products[2].image = photo
-        products[2].save(update_fields=["image"])
+    # one row carries a photo so the ledger shows both a thumb and the monogram
+    # fallback. The file is generated, never borrowed: the shop's own media/ holds
+    # its real product pictures, and a manual that showed them would be leaking.
+    photo = _demo_photo()
+    products[2].image = photo
+    products[2].save(update_fields=["image"])
     return products
 
 
-def _existing_photo_name() -> str | None:
+def _demo_photo() -> str:
+    """A flat-colour PNG written under MEDIA_ROOT, returned as a relative name.
+
+    Assigning the name instead of a File object keeps upload_to from copying it a
+    second time into products/products/.
+    """
     from django.conf import settings
+    from PIL import Image
 
     folder = Path(settings.MEDIA_ROOT) / "products"
-    files = sorted(p.name for p in folder.glob("*") if p.suffix.lower() in {".jpg", ".png", ".webp"})
-    return f"products/{files[0]}" if files else None
+    folder.mkdir(parents=True, exist_ok=True)
+    if not (folder / "demo-photo.png").exists():
+        Image.new("RGB", (240, 240), (47, 94, 79)).save(folder / "demo-photo.png")
+    return "products/demo-photo.png"
 
 
 def opening() -> None:
@@ -2363,7 +2467,7 @@ Add `_cashier()` beside `_owner()` from Task 5 — identical body, `username=CAS
 
 **Files:**
 - Modify: `scripts/tutorial/shoot.py` (add `render_receipt_preview()`)
-- Test: `scripts/tutorial/tests/test_receipt_preview.py`, created with the same header as `test_seed_recipes.py` — `from django.contrib.auth import get_user_model`, `from django.test import TestCase`, `from scripts.tutorial import seed_demo, shoot`, and `from core.models import Order` — because these tests touch the database.
+- Test: `scripts/tutorial/tests/test_receipt_preview.py`, created with the same header as `test_seed_recipes.py` — `import tempfile`, `from django.contrib.auth import get_user_model`, `from django.test import TestCase, override_settings`, `from scripts.tutorial import seed_demo, shoot`, and `from core.models import Order` — because these tests touch the database.
 
 **Interfaces:**
 - Consumes: `seed_demo.selling()` (Task 21), `core.views.receipt_sheet_length_mm`, `settings.RECEIPT_COLOPHON_HEIGHT_MM`, `settings.COMPANY_INFO`, `static/css/receipt.css`, `core/templates/core/orders/prints/order_details.html`.

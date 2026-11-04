@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from django.test import SimpleTestCase
 
 
@@ -27,3 +29,26 @@ class DemoSettingsTests(SimpleTestCase):
 
         self.assertEqual(self.demo_settings.INSTALLED_APPS, settings.INSTALLED_APPS)
         self.assertEqual(self.demo_settings.AUTH_USER_MODEL, settings.AUTH_USER_MODEL)
+
+    def test_does_not_rename_the_live_projects_database(self):
+        """The deviation from the plan, guarded: the star-import binds the *same*
+        dict myshopproject.settings holds, so writing
+        DATABASES["default"]["NAME"] = SCRATCH_DB would retarget the shop's own
+        connection in every process that merely imported this shim."""
+        from myshopproject import settings
+
+        self.assertIsNot(self.demo_settings.DATABASES, settings.DATABASES)
+        self.assertNotEqual(settings.DATABASES["default"]["NAME"], "myshop_tutorial")
+
+    def test_gives_demo_uploads_their_own_media_folder(self):
+        """A photo uploaded through the product dialog would otherwise be written
+        among the shop's real product pictures, next door in media/products/."""
+        from myshopproject import settings
+
+        demo = Path(self.demo_settings.MEDIA_ROOT)
+        live = Path(settings.MEDIA_ROOT)
+        self.assertNotEqual(demo, live)
+        self.assertTrue(
+            demo.is_relative_to(live),
+            "the scratch media folder stays under media/, which .gitignore already covers",
+        )

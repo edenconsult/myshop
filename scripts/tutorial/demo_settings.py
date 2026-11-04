@@ -4,6 +4,8 @@ Star-importing the project settings runs its load_dotenv(..., override=True), so
 every override below is applied after .env has had its say and therefore wins.
 """
 
+from pathlib import Path
+
 from myshopproject.settings import *  # noqa: F403
 
 from scripts.tutorial.isolation import (
@@ -24,3 +26,7 @@ _broker = f"redis://127.0.0.1:6379/{BROKER_DB_INDEX}"
 CELERY_BROKER_URL = _broker
 CELERY_RESULT_BACKEND = _broker
 CELERY_TASK_DEFAULT_QUEUE = TUTORIAL_QUEUE
+
+# One folder below the shop's own photos, not beside them: media/ is git-ignored as
+# a whole, so the scratch tree stays untracked without touching .gitignore.
+MEDIA_ROOT = str(Path(MEDIA_ROOT) / "_tutorial")  # noqa: F405

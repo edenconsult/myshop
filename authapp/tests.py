@@ -229,6 +229,43 @@ class AccountOperationsTests(TestCase):
             self.client.login(username="ama", password=self.strong_password)
         )
 
+    def test_create_saves_the_names_the_owner_types(self):
+        """The dialog asks for both names, so both must reach the account."""
+        self.client.post(
+            reverse("auth:account-create"),
+            {
+                "username": "selorm",
+                "first_name": "Selorm",
+                "last_name": "Agbeko",
+                "password1": self.strong_password,
+                "password2": self.strong_password,
+            },
+        )
+
+        created = Account.objects.get(username="selorm")
+        self.assertEqual(created.first_name, "Selorm")
+        self.assertEqual(created.last_name, "Agbeko")
+
+    def test_create_caps_names_where_the_model_caps_them(self):
+        """A length written into the form instead of read from the model drifts,
+        and the edit dialog ends up accepting a name the create dialog refuses."""
+        cap = Account._meta.get_field("first_name").max_length
+        long_name = "A" * cap
+
+        response = self.client.post(
+            reverse("auth:account-create"),
+            {
+                "username": "longname",
+                "first_name": long_name,
+                "last_name": "Agbeko",
+                "password1": self.strong_password,
+                "password2": self.strong_password,
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(Account.objects.get(username="longname").first_name, long_name)
+
     def test_create_never_opens_an_admin_seat(self):
         """The form has no role field; a forged one must not be honoured."""
         self.client.post(
@@ -336,6 +373,182 @@ class AccountOperationsTests(TestCase):
         self.assertEqual(response.status_code, 403)
         self.owner.refresh_from_db()
         self.assertTrue(self.owner.is_active)
+
+
+class AccountDetailsTests(TestCase):
+    """The owner corrects a salesperson's name, phone and email from the roster —
+    the part of account management that profile covers only for yourself."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.owner = Account.objects.create_user(
+            username="boss", password="unused", user_type="ADMIN"
+        )
+        cls.rep = Account.objects.create_user(
+            username="kb", password="unused", user_type="SALEPERSON"
+        )
+
+    def setUp(self):
+        self.client.force_login(self.owner)
+
+    def url(self, account):
+        return reverse("auth:account-update-details", args=[account.pk])
+
+    def test_the_url_exists(self):
+        self.assertEqual(
+            self.url(self.rep), f"/accounts/{self.rep.pk}/update-details/"
+        )
+
+    def test_a_get_is_refused(self):
+        response = self.client.get(self.url(self.rep))
+
+        self.assertEqual(response.status_code, 405)
+
+    def test_a_salesperson_cannot_edit_anyone(self):
+        """POST, not GET: require_POST answers a GET with 405 before the role
+        gate runs, so a GET here would prove nothing about permissions."""
+        self.client.force_login(self.rep)
+
+        response = self.client.post(
+            self.url(self.rep),
+            {"first_name": "Self", "last_name": "Promoted", "telephone": "", "email": ""},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.rep.refresh_from_db()
+        self.assertEqual(self.rep.first_name, "")
+
+    def test_anonymous_visitor_is_sent_to_login(self):
+        self.client.logout()
+        url = self.url(self.rep)
+
+        response = self.client.post(
+            url, {"first_name": "No", "last_name": "One", "telephone": "", "email": ""}
+        )
+
+        self.assertRedirects(
+            response,
+            f"{reverse(settings.LOGIN_URL)}?next={url}",
+            fetch_redirect_response=False,
+        )
+
+    def test_the_owner_saves_new_details_for_a_salesperson(self):
+        response = self.client.post(
+            self.url(self.rep),
+            {
+                "first_name": "Kwame",
+                "last_name": "Braff",
+                "telephone": "0244000000",
+                "email": "kwame@example.com",
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.rep.refresh_from_db()
+        self.assertEqual(self.rep.first_name, "Kwame")
+        self.assertEqual(self.rep.last_name, "Braff")
+        self.assertEqual(self.rep.telephone, "0244000000")
+        self.assertEqual(self.rep.email, "kwame@example.com")
+
+    def test_the_redirect_flashes_the_saved_username(self):
+        response = self.client.post(
+            self.url(self.rep),
+            {"first_name": "Kwame", "last_name": "Braff", "telephone": "", "email": ""},
+        )
+
+        self.assertRedirects(
+            response,
+            f"{reverse('auth:accounts')}?updated=kb",
+            fetch_redirect_response=False,
+        )
+
+    def test_the_owner_cannot_edit_their_own_details_here(self):
+        """Self-service belongs to auth:profile, which verifies the old
+        password's sibling: the same guard the reset and deactivate views use."""
+        response = self.client.post(
+            self.url(self.owner),
+            {"first_name": "Own", "last_name": "Account", "telephone": "", "email": ""},
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.owner.refresh_from_db()
+        self.assertEqual(self.owner.first_name, "")
+
+    def test_a_forged_role_or_status_field_is_ignored(self):
+        self.client.post(
+            self.url(self.rep),
+            {
+                "first_name": "Still",
+                "last_name": "Cashier",
+                "telephone": "",
+                "email": "",
+                "username": "sneak",
+                "user_type": "ADMIN",
+                "is_active": False,
+            },
+        )
+
+        self.rep.refresh_from_db()
+        self.assertEqual(self.rep.user_type, "SALEPERSON")
+        self.assertEqual(self.rep.username, "kb")
+        self.assertTrue(self.rep.is_active)
+
+    def test_an_overlong_phone_is_rejected_without_saving(self):
+        response = self.client.post(
+            self.url(self.rep),
+            {
+                "first_name": "Kwame",
+                "last_name": "Braff",
+                "telephone": "02440000001",
+                "email": "kwame@example.com",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        bound = dict(response.context["edit_forms"])[self.rep.pk]
+        self.assertTrue(bound.errors)
+        # the row's dialog reopens with what was typed still in it
+        self.assertEqual(response.context["edit_open"], "kb")
+        self.assertEqual(bound["first_name"].value(), "Kwame")
+        self.rep.refresh_from_db()
+        self.assertEqual(self.rep.first_name, "")
+
+    def test_an_unknown_account_is_not_found(self):
+        response = self.client.post(
+            "/accounts/00000000-0000-0000-0000-000000000000/update-details/",
+            {"first_name": "Ghost", "last_name": "Row", "telephone": "", "email": ""},
+        )
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_the_roster_offers_edit_for_other_peoples_rows(self):
+        response = self.client.get(reverse("auth:accounts"))
+
+        self.assertContains(response, f'action="/accounts/{self.rep.pk}/update-details/"')
+        self.assertNotContains(
+            response, f'action="/accounts/{self.owner.pk}/update-details/"'
+        )
+
+    def test_the_roster_leaks_no_template_source(self):
+        """Django only strips a {# #} comment that closes on the same line, so a
+        wrapped comment prints itself onto the page as text."""
+        response = self.client.get(reverse("auth:accounts"))
+
+        self.assertNotContains(response, "{#")
+        self.assertNotContains(response, "{%")
+
+    def test_the_edit_dialog_starts_with_the_current_details(self):
+        self.rep.first_name = "Kwame"
+        self.rep.telephone = "0244000000"
+        self.rep.save()
+
+        response = self.client.get(reverse("auth:accounts"))
+
+        forms = dict(response.context["edit_forms"])
+        self.assertNotIn(str(self.owner.pk), {str(pk) for pk in forms})
+        form = forms[self.rep.pk]
+        self.assertEqual(form["first_name"].value(), "Kwame")
+        self.assertEqual(form["telephone"].value(), "0244000000")
 
 
 class AccountsMenuEntryTests(TestCase):

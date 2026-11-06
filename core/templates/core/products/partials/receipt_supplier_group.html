@@ -1,0 +1,55 @@
+{% load icons %}
+<section class="receipt-supplier-group flex flex-col gap-3 rounded-xl border border-slate-200 p-3 dark:border-slate-700"
+         data-group-index="{{ group.group_index }}">
+  <div class="grid grid-cols-1 items-end gap-3 sm:grid-cols-[1fr_1fr_auto]">
+    <label class="flex flex-col gap-1">
+      <span class="text-[11px] font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-300">Supplier</span>
+      <input type="text"
+             name="supplier_name[]"
+             class="receipt-supplier-name w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-emerald-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/30 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+             maxlength="255"
+             value="{{ group.supplier_name }}"
+             placeholder="Who sold these products"
+             @input="scheduleDraftSave()">
+      <input type="hidden" name="supplier_group_index[]" value="{{ group.group_index }}" class="receipt-supplier-group-index">
+    </label>
+    <label class="flex flex-col gap-1">
+      <span class="text-[11px] font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-300">Invoice / reference</span>
+      <input type="text"
+             name="external_reference[]"
+             class="receipt-external-reference tnum w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-emerald-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/30 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+             maxlength="255"
+             value="{{ group.external_reference }}"
+             placeholder="INV-0000"
+             @input="scheduleDraftSave()">
+    </label>
+    <button type="button"
+            class="inline-flex h-9 items-center justify-center gap-1 rounded-lg px-2 text-xs font-semibold text-rose-600 transition-colors hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-950/50"
+            title="Remove this supplier and its lines"
+            @click="removeSupplierGroup($el)">
+      {% icon 'delete' 'text-[17px]' %}
+      <span class="sm:sr-only">Remove supplier</span>
+    </button>
+  </div>
+  <div class="receipt-lines flex flex-col gap-2"
+       id="receipt_lines_{{ group.group_index }}">
+    {% for line in group.lines %}
+      {% if is_first and forloop.first %}
+        {% include "core/products/partials/receipt_line_row.html" with line=line presets=presets max_units=max_units is_first=True %}
+      {% else %}
+        {% include "core/products/partials/receipt_line_row.html" with line=line presets=presets max_units=max_units is_first=False %}
+      {% endif %}
+    {% endfor %}
+  </div>
+  <button type="button"
+          hx-get="{% url 'core:receipt-line-blank' %}?group_index={{ group.group_index }}"
+          hx-target="#receipt_lines_{{ group.group_index }}"
+          hx-swap="beforeend"
+          @htmx:afterRequest="focusLastReceiptSearch($el)"
+          :disabled="rowCount >= maxRows"
+          :class="rowCount >= maxRows ? 'cursor-not-allowed bg-slate-200 text-slate-400 dark:bg-slate-800' : ''"
+          class="inline-flex min-h-[30px] self-start items-center gap-1 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-800 transition-colors hover:bg-emerald-100 dark:border-emerald-900 dark:bg-emerald-950/50 dark:text-emerald-300">
+    {% icon 'add' 'text-[15px]' %}
+    Add product to this supplier
+  </button>
+</section>

@@ -2,7 +2,7 @@ from django.contrib.auth.decorators import login_required, user_passes_test
 from django.core.exceptions import ValidationError
 from django.db import DatabaseError, transaction
 from django.db.models.deletion import ProtectedError
-from django.shortcuts import get_object_or_404, render
+from django.shortcuts import get_object_or_404, redirect, render
 from django.db.models import (
     Case,
     Count,
@@ -15,7 +15,7 @@ from django.db.models import (
     When,
     DecimalField,
 )
-from django.http import HttpResponse
+from django.http import Http404, HttpResponse
 from decimal import Decimal
 from uuid import UUID, uuid4
 
@@ -23,7 +23,15 @@ from authapp.models import Account
 from .catalog_imports import PROFIT_RATE_MAX
 from .checkout import SaleLine, checkout
 from .inventory import ReceiptLine, adjust_batch, receive_stock
-from .models import Product, ProductCategory, Order, OrderItem, StockBatch, StockReceiptSource
+from .models import (
+    Order,
+    OrderItem,
+    Product,
+    ProductCategory,
+    StockBatch,
+    StockReceiptDraft,
+    StockReceiptSource,
+)
 from utils import (
     can_ring_up,
     is_admin,
@@ -99,6 +107,12 @@ LEDGER_SORTS = {
 }
 
 LEDGER_STATUSES = {"all", "in_stock", "low", "out_of_stock", "alert"}
+
+
+@login_required
+@user_passes_test(can_ring_up)
+def help_support(request):
+    return render(request, "core/help.html")
 
 
 @login_required
@@ -179,10 +193,26 @@ def products_home(request):
     initial_view = request.GET.get("view", "")
     if initial_view not in {"add", "import", "out-of-stock"}:
         initial_view = ""
+    initial_draft_id = ""
+    raw_draft_id = request.GET.get("draft_id", "").strip()
+    if raw_draft_id:
+        try:
+            draft_id = UUID(raw_draft_id)
+        except ValueError as error:
+            raise Http404("Delivery draft not found.") from error
+        draft = get_object_or_404(
+            StockReceiptDraft,
+            pk=draft_id,
+            recorded_by=request.user,
+        )
+        if draft.booked_at is not None:
+            return redirect("core:stock-receipts")
+        initial_draft_id = str(draft.pk)
 
     context = {
         "initial_view": initial_view,
         "initial_status": "alert" if initial_view == "out-of-stock" else "all",
+        "initial_draft_id": initial_draft_id,
     }
     return render(request, "core/products/products.html", context)
 
@@ -1161,17 +1191,9 @@ def make_order(request):
         return render(request, "core/orders/order_made.html", context)
 
     # order was successful
-    today = dt.date.today()
-    date_start = timezone.make_aware(
-        dt.datetime(year=today.year, month=today.month, day=today.day, hour=6)
-    )
-    date_end = timezone.make_aware(
-        dt.datetime(year=today.year, month=today.month, day=today.day, hour=20)
-    )
     order_number = Order.objects.filter(
-        Q(user=request.user),
-        Q(created__gte=date_start),
-        Q(created__lt=date_end),
+        user=request.user,
+        created__date=timezone.localdate(),
     ).count()
     message = f"Order Number {order_obj.code} totaling GHs {order_obj.overall_amount_paid:.2f} was successful. Thank you."  # noqa: E501
     msg_type = "success"
@@ -1297,10 +1319,10 @@ def view_order(request, order_id, order_number):
 
 
 RECEIPT_LOGO = "images/eden-logo.png"
-RECEIPT_LOGO_HEIGHT_MM = 24.0  # 14mm logo plus its contact and credit lines
+RECEIPT_COLOPHON_HEIGHT_MM = 27.0  # logo, developer name, and contact lines
 
 
-def receipt_sheet_length_mm(order, company, logo_mm=0.0):
+def receipt_sheet_length_mm(order, company, colophon_mm=0.0):
     """WeasyPrint refuses content-sized pages, so size the 80mm sheet by hand.
     The 60mm base is the measured furniture (head, meta, rules, footer) plus a
     ~1mm margin, then 4.9mm per wrapped text line — a 3.9mm 8pt line with row
@@ -1309,7 +1331,7 @@ def receipt_sheet_length_mm(order, company, logo_mm=0.0):
     items = order.orderitem_set.select_related("product")
     name_lines = sum(max(1, math.ceil(len(i.product.name) / 22)) for i in items)
     extra = (4 if company["email"] else 0) + (4 if order.customer_name else 0)
-    return max(80.0, round(60 + name_lines * 4.9 + extra + logo_mm, 1))
+    return max(80.0, round(60 + name_lines * 4.9 + extra + colophon_mm, 1))
 
 
 def get_receipt(request, order_id):
@@ -1334,6 +1356,7 @@ def print_order_pdf(request, order_id, order_number):
         "order": order,
         "order_number": order_number,
         "logo_data_uri": logo,
+        "developer": settings.RECEIPT_DEVELOPER_INFO,
     }
     today = dt.datetime.now()
     todays_date = f"{today:%d%m%Y%H%M%S}"
@@ -1348,7 +1371,7 @@ def print_order_pdf(request, order_id, order_number):
             receipt_sheet_length_mm(
                 order,
                 settings.COMPANY_INFO,
-                RECEIPT_LOGO_HEIGHT_MM if logo else 0.0,
+                RECEIPT_COLOPHON_HEIGHT_MM,
             ),
         ),
     )

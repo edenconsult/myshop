@@ -150,11 +150,15 @@
         document.addEventListener("keydown", (event) => {
           if (event.key === "Escape") setMenuOpen(false);
 
-          // F2 starts a new sale register from anywhere on the hub.
-          if (event.key === "F2") {
-            event.preventDefault();
-            document.querySelector("[data-pos-link]")?.click();
-          }
+          if (event.key !== "F2") return;
+          const posLink = document.querySelector("[data-pos-link]");
+          if (!posLink) return;
+
+          event.preventDefault();
+          const target = new URL(posLink.href, window.location.href);
+          if (target.pathname === window.location.pathname && target.search === window.location.search) return;
+
+          posLink.click();
         });
 
         document.body.addEventListener("htmx:configRequest", (event) => {

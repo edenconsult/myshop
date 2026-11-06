@@ -6,6 +6,7 @@ app_name = "core"
 
 urlpatterns = [
     path("", views.index, name="base"),
+    path("help/", views.help_support, name="help"),
     path(
         "products/",
         include(
@@ -71,9 +72,29 @@ urlpatterns = [
                     name="receive-stock-question",
                 ),
                 path(
+                    "receipts/receive/selected/",
+                    batch_views.receive_selected_stock_question,
+                    name="receive-selected-stock-question",
+                ),
+                path(
+                    "receipts/receive/group/",
+                    batch_views.receipt_supplier_group_blank,
+                    name="receipt-supplier-group-blank",
+                ),
+                path(
                     "receipts/receive/line/",
                     batch_views.receipt_line_blank,
                     name="receipt-line-blank",
+                ),
+                path(
+                    "receipts/drafts/save/",
+                    batch_views.save_receipt_draft,
+                    name="save-receipt-draft",
+                ),
+                path(
+                    "receipts/drafts/<uuid:draft_id>/delete/",
+                    batch_views.delete_receipt_draft,
+                    name="delete-receipt-draft",
                 ),
                 path(
                     "receipts/product-search/",

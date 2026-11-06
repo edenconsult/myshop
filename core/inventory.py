@@ -14,6 +14,7 @@ from .models import (
     Product,
     StockAdjustment,
     StockBatch,
+    StockReceiptDraft,
     StockReceipt,
     StockReceiptSource,
 )
@@ -202,6 +203,8 @@ def receive_stock(
     external_reference: str = "",
     notes: str = "",
     reason: str = "",
+    draft: StockReceiptDraft | None = None,
+    draft_group_index: int | None = None,
 ) -> StockReceipt:
     """Record a receipt and its batches as one retry-safe inventory operation."""
     _require_admin(actor)
@@ -223,6 +226,17 @@ def receive_stock(
     reason = _validate_text(reason, "reason", 500)
     if source != StockReceiptSource.PURCHASE and not reason:
         raise ValidationError({"reason": "A reason is required for non-purchase stock."})
+    if draft is not None:
+        if not isinstance(draft, StockReceiptDraft) or draft.recorded_by_id != actor.pk:
+            raise ValidationError({"draft": "This draft does not belong to this account."})
+        if source != StockReceiptSource.PURCHASE:
+            raise ValidationError({"draft": "Only purchase receipts can be linked to a draft."})
+        if (
+            isinstance(draft_group_index, bool)
+            or not isinstance(draft_group_index, int)
+            or draft_group_index < 0
+        ):
+            raise ValidationError({"draft": "Choose a valid supplier group."})
 
     line_data = [
         {
@@ -246,6 +260,8 @@ def receive_stock(
             "external_reference": external_reference,
             "notes": notes,
             "reason": reason,
+            "draft_id": str(draft.pk) if draft is not None else None,
+            "draft_group_index": draft_group_index,
         }
     )
     replay = _existing_replay(
@@ -286,6 +302,8 @@ def receive_stock(
                 external_reference=external_reference,
                 notes=notes,
                 reason=reason,
+                draft=draft,
+                draft_group_index=draft_group_index,
             )
 
         receipt, created = _create_with_retry(

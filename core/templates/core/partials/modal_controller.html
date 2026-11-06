@@ -1,0 +1,61 @@
+(() => {
+  if (window.__ledgerModals) return;
+  window.__ledgerModals = true;
+
+  const root = document.getElementById("modal_root");
+  if (!root) return;
+
+  let opener = null;
+  const overlay = () => root.firstElementChild;
+
+  const close = () => {
+    if (!overlay()) return;
+    root.innerHTML = "";
+    document.body.classList.remove("overflow-hidden");
+    opener?.focus();
+    opener = null;
+  };
+
+  const focusable = () =>
+    [...overlay().querySelectorAll(
+      'a[href], button:not([disabled]), input:not([type="hidden"]), select, textarea, [tabindex]:not([tabindex="-1"])',
+    )].filter((el) => el.type !== "hidden" && el.getClientRects().length > 0);
+
+  document.addEventListener("keydown", (event) => {
+    if (!overlay()) return;
+
+    if (event.key === "Escape") {
+      event.preventDefault();
+      close();
+      return;
+    }
+
+    if (event.key !== "Tab") return;
+    const items = focusable();
+    if (items.length === 0) return;
+
+    const first = items[0];
+    const last = items[items.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  });
+
+  root.addEventListener("mousedown", (event) => {
+    if (event.target === overlay()) close();
+  });
+
+  root.addEventListener("click", (event) => {
+    if (event.target.closest("[data-modal-close]")) close();
+  });
+
+  root.addEventListener("htmx:afterSwap", () => {
+    document.body.classList.add("overflow-hidden");
+    if (!opener) opener = document.activeElement;
+    overlay()?.querySelector("[data-autofocus]")?.focus();
+  });
+})();

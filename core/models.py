@@ -90,6 +90,25 @@ class StockReceiptSource(models.TextChoices):
     ADJUSTMENT_OPENING = "ADJUSTMENT_OPENING", "Adjustment opening balance"
 
 
+class StockReceiptDraft(models.Model):
+    id = models.UUIDField(primary_key=True, editable=False, default=uuid.uuid4)
+    recorded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="stock_receipt_drafts",
+    )
+    payload = models.JSONField(default=dict)
+    request_key = models.UUIDField(null=True, blank=True, unique=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    booked_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["recorded_by", "booked_at", "updated_at"]),
+        ]
+
+
 class StockReceipt(models.Model):
     id = models.UUIDField(primary_key=True, editable=False, default=uuid.uuid4)
     source = models.CharField(max_length=24, choices=StockReceiptSource.choices)
@@ -109,12 +128,27 @@ class StockReceipt(models.Model):
     reason = models.CharField(max_length=500, blank=True)
     request_key = models.UUIDField(null=True, blank=True, unique=True)
     request_fingerprint = models.CharField(max_length=64, blank=True, default="")
+    draft = models.ForeignKey(
+        StockReceiptDraft,
+        on_delete=models.PROTECT,
+        related_name="receipts",
+        null=True,
+        blank=True,
+    )
+    draft_group_index = models.PositiveIntegerField(null=True, blank=True)
 
     objects = models.Manager()
 
     class Meta:
         indexes = [
             models.Index(fields=["received_at", "id"], name="receipt_fifo_idx"),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["draft", "draft_group_index"],
+                condition=models.Q(draft__isnull=False),
+                name="receipt_draft_group_unique",
+            ),
         ]
 
 

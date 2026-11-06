@@ -1,6 +1,6 @@
 @echo off
-rem Started by the Startup shortcut, or by hand. Both launchers refuse to
-stack (busy port, existing worker), so a second run is a no-op.
+rem Started by the Startup shortcut, or by hand. Keep each long-running
+rem launcher hidden; service output and errors are written to the log files.
 set "svc=%~dp0"
-start "myshop-devserver" /min powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%svc%start-devserver.ps1"
-start "myshop-celery-worker" /min powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%svc%start-celery-worker.ps1"
+start "myshop-devserver" /min powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "%svc%start-devserver.ps1"
+start "myshop-celery-worker" /min powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "%svc%start-celery-worker.ps1"

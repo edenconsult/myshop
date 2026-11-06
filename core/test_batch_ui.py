@@ -256,7 +256,8 @@ class ReceiveDialogTests(BatchUiTestCase):
     def test_dialog_exposes_cost_purchase_fields_and_request_key(self):
         response = self.client.get(reverse("core:receive-stock-question"))
         for name in ("line_product_id[]", "line_unit_cost[]", "request_key",
-                     "purchased_on", "supplier_name", "external_reference"):
+                     "purchased_on", "supplier_name[]", "external_reference[]",
+                     "line_group_index[]", "supplier_group_index[]"):
             self.assertContains(response, f'name="{name}"')
 
     def test_posted_cost_date_and_supplier_are_persisted_not_catalogue_defaults(self):

@@ -22,7 +22,7 @@ body {
 }
 
 .receipt-head .shop {
-  font-size: 9.5pt;
+  font-size: 9pt;
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -93,18 +93,38 @@ table.lines tfoot td {
   font-size: 7.5pt;
 }
 
-/* Small logo and developer credit sit nearest the paper's cut edge. */
+/* Keep the developer identity and contacts compact at the paper's cut edge. */
 .colophon {
   margin-top: 3mm;
-  text-align: center;
-  font-size: 6.5pt;
+  padding-top: 1.5mm;
+  border-top: 0.3mm dashed #000;
+  font-size: 6pt;
+}
+
+.brand-footer {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.brand-footer td {
+  padding: 0;
+  vertical-align: middle;
+}
+
+.brand-footer .logo-cell {
+  width: 13mm;
 }
 
 .colophon .logo {
-  width: 14mm;
+  width: 10mm;
   height: auto;
 }
 
-.colophon .dev {
-  margin-top: 1mm;
+.developer-info {
+  text-align: left;
+  line-height: 1.35;
+}
+
+.colophon .brand-name {
+  font-weight: 700;
 }

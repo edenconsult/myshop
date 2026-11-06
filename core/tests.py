@@ -4,20 +4,24 @@ import re
 import shutil
 import tempfile
 import datetime as dt
+import csv
 from datetime import timedelta
 from decimal import Decimal
-from io import BytesIO
+from io import BytesIO, StringIO
 from unittest import mock
 from uuid import uuid4
 
 from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.db import DatabaseError
+from django.template.loader import render_to_string
 from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 from PIL import Image
 
 from authapp.models import Account
+from core.checkout import SaleLine, checkout
 from core.inventory import ReceiptLine, receive_stock
 from core.forms import ProductCreationForm
 from core.models import (
@@ -28,7 +32,13 @@ from core.models import (
     StockBatch,
     StockReceiptSource,
 )
-from core.views import receipt_sheet_length_mm, report_context, report_range
+from core.views import (
+    receipt_sheet_length_mm,
+    report_context,
+    report_ledger_queryset,
+    report_range,
+    report_screen_context,
+)
 
 
 def png_upload(name="glow.png", width=8, height=8):
@@ -774,6 +784,231 @@ class SalesReportScreenTests(LedgerTestCase):
                 self.assertEqual(response.status_code, 200)
 
 
+class ReportCostBasisTests(LedgerTestCase):
+    """A report must say how much of its cost is recorded and how much is an
+    estimate frozen at cutover; a combined figure with any estimate is never
+    presented as exact."""
+
+    def setUp(self):
+        super().setUp()
+        self.actual_order = self.make_order(
+            "ACT001", self.admin, [(self.elixir, 2)]  # 280 revenue / 120 cost
+        )
+        OrderItem.objects.filter(order=self.actual_order).update(
+            cost_is_estimated=False
+        )
+        self.estimated_order = self.make_order(
+            "EST001", self.admin, [(self.lipstick, 1)]  # 105 revenue / 40 cost
+        )
+
+    def test_the_report_splits_recorded_from_estimated_costs(self):
+        response = self.client.get(reverse("core:sales-report"))
+        body = response.content.decode()
+        kpi = response.context["report"]["kpi"]
+
+        self.assertEqual(kpi["actual_cost"], Decimal("120.00"))
+        self.assertEqual(kpi["estimated_cost"], Decimal("40.00"))
+        self.assertEqual(kpi["actual_profit"], Decimal("160.00"))
+        self.assertEqual(kpi["estimated_profit"], Decimal("65.00"))
+        self.assertEqual(kpi["estimated_line_count"], 1)
+        self.assertEqual(kpi["estimated_order_count"], 1)
+        self.assertTrue(kpi["profit_is_estimated"])
+
+        for label in (
+            "Cost Basis",
+            "Actual cost",
+            "Estimated cost",
+            "Actual profit",
+            "Estimated profit",
+            "Partly estimated",
+        ):
+            with self.subTest(label=label):
+                self.assertIn(label, body)
+        self.assertNotIn("Catalogue cost", body)
+
+    def test_the_report_says_all_recorded_when_nothing_is_estimated(self):
+        OrderItem.objects.filter(order=self.estimated_order).update(
+            cost_is_estimated=False
+        )
+
+        response = self.client.get(reverse("core:sales-report"))
+        body = response.content.decode()
+
+        self.assertFalse(response.context["report"]["kpi"]["profit_is_estimated"])
+        self.assertIn("All recorded", body)
+        self.assertIn(
+            "Every sale line in this window carries the cost recorded on its "
+            "purchase batch.",
+            body,
+        )
+        self.assertNotIn("Partly estimated", body)
+
+    def test_the_ledger_marks_only_the_estimated_order(self):
+        response = self.client.get(reverse("core:sales-report-ledger"))
+        body = response.content.decode()
+
+        self.assertEqual(body.count(">Est.</span>"), 1)
+        self.assertContains(
+            response,
+            'title="1 line costed from opening or legacy estimates"',
+            count=1,
+        )
+        actual = next(
+            order for order in response.context["page_obj"] if order.code == "ACT001"
+        )
+        estimated = next(
+            order for order in response.context["page_obj"] if order.code == "EST001"
+        )
+        self.assertEqual(actual.estimated_lines, 0)
+        self.assertEqual(estimated.estimated_lines, 1)
+
+    def test_the_pdf_template_splits_recorded_from_estimated_costs(self):
+        context = report_screen_context({})
+        context["rows"] = report_ledger_queryset(context["rng"], "")
+
+        html = render_to_string("core/orders/prints/all_reports.html", context)
+
+        for label in (
+            "— of which actual cost",
+            "— of which estimated cost",
+            "— actual profit",
+            "— estimated profit",
+            "Cost and profit are partly estimated",
+            "cost includes an estimate frozen at cutover",
+        ):
+            with self.subTest(label=label):
+                self.assertIn(label, html)
+        self.assertIn("GH₵ 120.00", html)
+        self.assertIn("GH₵ 40.00", html)
+
+    def test_todays_profit_tile_says_when_partly_estimated(self):
+        response = self.client.get(reverse("core:orders"), {"view": "orders"})
+
+        self.assertContains(response, "partly estimated")
+
+    def test_the_screen_and_the_csv_agree_on_both_cost_bases(self):
+        screen = self.client.get(reverse("core:sales-report"))
+        kpi = screen.context["report"]["kpi"]
+
+        export = self.client.get(reverse("core:sales-report-csv"))
+        rows = list(csv.DictReader(StringIO(export.content.decode("utf-8"))))
+
+        self.assertEqual(
+            sum(Decimal(row["Actual Cost"]) for row in rows), kpi["actual_cost"]
+        )
+        self.assertEqual(
+            sum(Decimal(row["Estimated Cost"]) for row in rows), kpi["estimated_cost"]
+        )
+        self.assertEqual(
+            sum(Decimal(row["Actual Profit"]) for row in rows), kpi["actual_profit"]
+        )
+        self.assertEqual(
+            sum(Decimal(row["Estimated Profit"]) for row in rows),
+            kpi["estimated_profit"],
+        )
+        self.assertEqual(
+            sum(int(row["Estimated Lines"]) for row in rows),
+            kpi["estimated_line_count"],
+        )
+
+
+class ReportFrozenCostTests(LedgerTestCase):
+    """Task 7's report arithmetic: a sale's frozen cost is counted once, no
+    matter how many batches or allocation rows stand behind it."""
+
+    def sell_across_two_batches(self):
+        product = Product.objects.create(
+            name="Two Batch Oil",
+            sku="TBO01",
+            stock=0,
+            cost=Decimal("20.00"),
+            price=Decimal("40.00"),
+            profit_rate=Decimal("0.50"),
+        )
+        received_at = timezone.now()
+        receive_stock(
+            actor=self.admin,
+            request_key=uuid4(),
+            lines=[ReceiptLine(product.pk, 10, Decimal("20.00"))],
+            received_at=received_at,
+        )
+        receive_stock(
+            actor=self.admin,
+            request_key=uuid4(),
+            lines=[ReceiptLine(product.pk, 5, Decimal("25.00"))],
+            received_at=received_at + timedelta(seconds=1),
+        )
+        order = checkout(
+            actor=self.admin,
+            request_key=uuid4(),
+            lines=[SaleLine(product.pk, 12, Decimal("480.00"))],
+        )
+        return product, order
+
+    def test_a_multi_batch_order_is_counted_once_at_its_frozen_cost(self):
+        self.sell_across_two_batches()
+
+        response = self.client.get(reverse("core:sales-report"))
+        kpi = response.context["report"]["kpi"]
+
+        self.assertEqual(kpi["order_count"], 1)
+        self.assertEqual(kpi["units"], 12)
+        self.assertEqual(kpi["revenue"], Decimal("480.00"))
+        self.assertEqual(kpi["cost"], Decimal("250.00"))
+        self.assertEqual(kpi["profit"], Decimal("230.00"))
+        self.assertEqual(kpi["actual_cost"], Decimal("250.00"))
+        self.assertEqual(kpi["estimated_cost"], Decimal("0.00"))
+        self.assertFalse(kpi["profit_is_estimated"])
+
+    def test_repricing_the_catalogue_after_the_sale_does_not_move_the_report(self):
+        product, _order = self.sell_across_two_batches()
+        before = self.client.get(reverse("core:sales-report")).context["report"]["kpi"]
+
+        product.cost = Decimal("99.00")
+        product.price = Decimal("120.00")
+        product.save(update_fields=["cost", "price"])
+
+        after = self.client.get(reverse("core:sales-report")).context["report"]["kpi"]
+        self.assertEqual(after["cost"], before["cost"])
+        self.assertEqual(after["revenue"], before["revenue"])
+        self.assertEqual(after["profit"], before["profit"])
+        self.assertEqual(after["actual_cost"], Decimal("250.00"))
+
+    def test_an_all_legacy_period_is_labelled_estimated(self):
+        self.make_order("LEG001", self.admin, [(self.elixir, 2)])
+
+        response = self.client.get(reverse("core:sales-report"))
+        kpi = response.context["report"]["kpi"]
+
+        self.assertEqual(kpi["actual_cost"], Decimal("0.00"))
+        self.assertEqual(kpi["estimated_cost"], Decimal("120.00"))
+        self.assertEqual(kpi["estimated_line_count"], 1)
+        self.assertEqual(kpi["estimated_order_count"], 1)
+        self.assertTrue(kpi["profit_is_estimated"])
+        self.assertContains(response, "Partly estimated")
+        self.assertContains(
+            response, "Combined cost and profit are therefore partly estimated"
+        )
+
+    def test_an_empty_period_reports_zero_without_an_estimate(self):
+        response = self.client.get(reverse("core:sales-report"))
+        kpi = response.context["report"]["kpi"]
+
+        self.assertEqual(kpi["order_count"], 0)
+        self.assertEqual(kpi["revenue"], Decimal("0.00"))
+        self.assertEqual(kpi["cost"], Decimal("0.00"))
+        self.assertEqual(kpi["actual_cost"], Decimal("0.00"))
+        self.assertEqual(kpi["estimated_cost"], Decimal("0.00"))
+        self.assertEqual(kpi["estimated_line_count"], 0)
+        self.assertFalse(kpi["profit_is_estimated"])
+        self.assertContains(response, "Gross Revenue")
+        self.assertNotContains(response, "Cost Basis")
+
+        export = self.client.get(reverse("core:sales-report-csv"))
+        rows = list(csv.DictReader(StringIO(export.content.decode("utf-8"))))
+        self.assertEqual(rows, [])
+
+
 class SalesReportExportTests(LedgerTestCase):
     def test_csv_respects_the_range_and_the_cashier(self):
         self.make_order("EXE001", self.admin, [(self.elixir, 2)])
@@ -1085,8 +1320,102 @@ RECEIPT_COMPANY = {
     "phone": "+233 24 833 1063",
     "email": "orders@noble.example",
     "footer": "Goods sold are not returnable. Thank you for your patronage!",
-    "developer": "Eden",
 }
+
+RECEIPT_DEVELOPER = {
+    "name": "Eden Creative Systems",
+    "phone": "+233 24 816 0391",
+    "email": "berkojohnson@gmail.com",
+    "website": "ecreativesys.com",
+}
+
+
+class CompanyPrintHeaderTests(LedgerTestCase):
+    """Report PDFs render the configured company block consistently."""
+
+    @override_settings(
+        COMPANY_INFO={
+            "name": "Test Shop",
+            "location": "Market Road",
+            "phone": "+233 20 000 0000",
+            "email": "shop@example.test",
+            "footer": "Thank you",
+        }
+    )
+    def test_daily_orders_pdf_uses_configured_company_header(self):
+        with mock.patch("utils.HTML") as html_cls:
+            html_cls.return_value.write_pdf.return_value = b"%PDF-test"
+            response = self.client.get(
+                reverse(
+                    "core:print-todays-orders",
+                    args=("2026-11-03", "all"),
+                )
+            )
+
+        self.assertEqual(response["Content-Type"], "application/pdf")
+        html = html_cls.call_args.kwargs["string"]
+        for value in (
+            "Test Shop",
+            "Market Road",
+            "+233 20 000 0000",
+            "shop@example.test",
+        ):
+            self.assertIn(value, html)
+        self.assertNotIn("Noble Cosmetics Ltd.", html)
+
+    @override_settings(
+        COMPANY_INFO={
+            "name": "Test Shop",
+            "location": "Market Road",
+            "phone": "+233 20 000 0000",
+            "email": "shop@example.test",
+            "footer": "Thank you",
+        }
+    )
+    def test_sales_report_pdf_uses_configured_company_header(self):
+        with mock.patch("utils.HTML") as html_cls:
+            html_cls.return_value.write_pdf.return_value = b"%PDF-test"
+            response = self.client.get(reverse("core:sales-report-pdf"))
+
+        self.assertEqual(response["Content-Type"], "application/pdf")
+        html = html_cls.call_args.kwargs["string"]
+        for value in (
+            "Test Shop",
+            "Market Road",
+            "+233 20 000 0000",
+            "shop@example.test",
+        ):
+            self.assertIn(value, html)
+        self.assertNotIn("Noble Cosmetics Ltd.", html)
+
+
+class WkhtmltopdfPrintTests(LedgerTestCase):
+    @override_settings(
+        PDF_RENDERER="wkhtmltopdf",
+        WKHTMLTOPDF_PATH=r"C:\Program Files\wkhtmltopdf\bin\wkhtmltopdf.exe",
+    )
+    def test_receipt_pdf_uses_wkhtmltopdf_and_roll_dimensions(self):
+        order = self.make_order("WK001", self.admin, [(self.elixir, 1)])
+        url = reverse("core:print-order-pdf", args=(order.id, 1))
+
+        with mock.patch("utils.pdfkit.from_string", return_value=b"%PDF-test") as render:
+            response = self.client.get(url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "application/pdf")
+        self.assertIn("attachment; filename=", response["Content-Disposition"])
+        self.assertEqual(render.call_args.args[1], False)
+        self.assertIn("receipt.css", render.call_args.kwargs["css"][-1])
+        self.assertEqual(
+            render.call_args.kwargs["options"]["page-width"], "80mm"
+        )
+        self.assertTrue(
+            render.call_args.kwargs["options"]["page-height"].endswith("mm")
+        )
+        self.assertEqual(
+            render.call_args.kwargs["configuration"].wkhtmltopdf,
+            r"C:\Program Files\wkhtmltopdf\bin\wkhtmltopdf.exe",
+        )
 
 
 class ThermalReceiptTests(LedgerTestCase):
@@ -1118,13 +1447,28 @@ class ThermalReceiptTests(LedgerTestCase):
         sheets = [call.kwargs.get("filename", "") for call in css_spy.call_args_list]
         return html_cls.call_args.kwargs["string"], sheets
 
-    @override_settings(COMPANY_INFO=RECEIPT_COMPANY)
-    def test_receipt_carries_the_settings_company_block(self):
+    @override_settings(
+        COMPANY_INFO=RECEIPT_COMPANY,
+        RECEIPT_DEVELOPER_INFO=RECEIPT_DEVELOPER,
+    )
+    def test_receipt_separates_store_header_from_developer_footer(self):
         html, sheets = self.captured_receipt_html()
 
         for needle in RECEIPT_COMPANY.values():
             self.assertIn(needle, html)
+        for needle in RECEIPT_DEVELOPER.values():
+            self.assertIn(needle, html)
         self.assertIn(self.order.code, html)
+        header = html.split('<footer class="colophon">', 1)[0]
+        footer = html.split('<footer class="colophon">', 1)[1]
+        self.assertIn(RECEIPT_COMPANY["phone"], header)
+        self.assertIn(RECEIPT_COMPANY["email"], header)
+        self.assertNotIn(RECEIPT_DEVELOPER["phone"], header)
+        self.assertNotIn(RECEIPT_COMPANY["phone"], footer)
+        self.assertNotIn(RECEIPT_COMPANY["email"], footer)
+        self.assertIn(RECEIPT_DEVELOPER["phone"], footer)
+        self.assertIn(RECEIPT_DEVELOPER["email"], footer)
+        self.assertIn(RECEIPT_DEVELOPER["website"], footer)
         self.assertTrue(
             any(s.endswith("receipt.css") for s in sheets),
             f"no receipt stylesheet among {sheets}",
@@ -1134,12 +1478,15 @@ class ThermalReceiptTests(LedgerTestCase):
             "the view never sent a computed roll size",
         )
 
-    @override_settings(COMPANY_INFO={**RECEIPT_COMPANY, "email": ""})
+    @override_settings(
+        COMPANY_INFO={**RECEIPT_COMPANY, "email": ""},
+        RECEIPT_DEVELOPER_INFO=RECEIPT_DEVELOPER,
+    )
     def test_blank_email_drops_its_line(self):
         html, _ = self.captured_receipt_html()
 
         self.assertNotIn("orders@noble.example", html)
-        self.assertNotIn("Email", html)
+        self.assertIn(RECEIPT_DEVELOPER["email"], html)
 
     @override_settings(COMPANY_INFO=RECEIPT_COMPANY)
     def test_sheet_length_clamps_and_grows_per_wrapped_line(self):
@@ -1224,6 +1571,33 @@ class PosCheckoutTests(LedgerTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(Order.objects.count(), 0)
         self.assertEqual(Product.objects.get(pk=self.elixir.pk).stock, 50)
+
+    def test_database_failure_does_not_partially_settle_a_sale(self):
+        cart = [
+            {"id": str(self.elixir.pk), "qty": 2, "total_price": "280.00"},
+        ]
+        with (
+            mock.patch(
+                "core.checkout.SaleBatchAllocation.objects.bulk_create",
+                side_effect=DatabaseError("simulated database disconnect"),
+            ),
+            self.assertLogs("core.views", level="ERROR"),
+        ):
+            response = self.post_cart(cart)
+
+        self.assertContains(response, "The sale could not be completed. Try again.")
+        self.assertNotContains(response, 'data-sale-result="settled"')
+        self.assertEqual(Order.objects.count(), 0)
+        self.assertEqual(OrderItem.objects.count(), 0)
+        self.assertEqual(Product.objects.get(pk=self.elixir.pk).stock, 50)
+        self.assertEqual(
+            sum(
+                StockBatch.objects.filter(product=self.elixir).values_list(
+                    "quantity_remaining", flat=True
+                )
+            ),
+            50,
+        )
 
     def test_unreadable_cart_is_logged_and_not_reported_as_retryable(self):
         """What htmx 2 used to send — ``[object Object]`` — is not JSON at all.
@@ -1319,6 +1693,45 @@ class PosSettlementPanelTests(LedgerTestCase):
         # markup can never match what htmx dispatches; kebab-case is the only
         # spelling that reaches the register after the receipt swaps in
         self.assertIn("@htmx:after-swap=", body)
+
+
+class HelpSupportAccessTests(LedgerTestCase):
+    def test_an_admin_can_open_help_from_the_dashboard(self):
+        response = self.client.get(reverse("core:help"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, "core/help.html")
+        for phrase in ("Find and add products", "Sales reports and receipts"):
+            with self.subTest(phrase=phrase):
+                self.assertContains(response, phrase)
+        self.assertNotContains(response, "support@noblecosmetics.com")
+        self.assertNotContains(response, "Scan a Barcode")
+
+        dashboard = self.client.get(reverse("core:base"))
+        self.assertContains(dashboard, reverse("core:help"))
+        self.assertContains(dashboard, "Help &amp; Support")
+
+    def test_a_cashier_can_open_help_without_receiving_admin_navigation(self):
+        cashier = Account.objects.create_user(
+            username="help-cashier",
+            password="test-password",
+            user_type="SALEPERSON",
+        )
+        self.client.force_login(cashier)
+
+        response = self.client.get(reverse("core:help"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Help &amp; Support")
+        self.assertContains(response, "Help")
+        self.assertNotContains(response, "<span>Products &amp; Stock</span>")
+        self.assertNotContains(response, "<span>Sales Reports</span>")
+        self.assertContains(response, "available to administrators")
+
+    def test_help_requires_a_signed_in_register_user(self):
+        self.client.logout()
+
+        self.assertEqual(self.client.get(reverse("core:help")).status_code, 302)
 
 
 class CashierRegisterAccessTests(LedgerTestCase):
@@ -1512,14 +1925,18 @@ class CashierReceiptTests(LedgerTestCase):
     def test_the_register_links_the_cashier_to_their_own_receipt(self):
         self.client.force_login(self.rep)
 
-        response = self.client.post(
-            reverse("core:make-order"),
-            {
-                "items": json.dumps(
-                    [{"id": str(self.elixir.pk), "qty": 1, "total_price": "140.00"}]
-                )
-            },
+        after_hours = timezone.make_aware(
+            dt.datetime.combine(timezone.localdate(), dt.time(22, 30))
         )
+        with mock.patch("django.utils.timezone.now", return_value=after_hours):
+            response = self.client.post(
+                reverse("core:make-order"),
+                {
+                    "items": json.dumps(
+                        [{"id": str(self.elixir.pk), "qty": 1, "total_price": "140.00"}]
+                    )
+                },
+            )
 
         order = Order.objects.get(user=self.rep)
         self.assertContains(response, self.receipt_urls(order.id)[1])

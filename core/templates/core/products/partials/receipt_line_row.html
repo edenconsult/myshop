@@ -16,7 +16,7 @@
   [data-autofocus], so exactly one input carries it: the search box for a row
   still looking for a product, the units box once one is chosen.
 
-  The chosen name and its code are two separate elements and the <p> above them
+  The chosen name and its code are two separate elements and their parent
   is the only visibility switch: pickReceiptProduct() rewrites each with
   textContent, and that write deletes whatever the node used to contain.
 {% endcomment %}
@@ -39,6 +39,13 @@
            name="line_product_id[]"
            class="receipt-row-product-id"
            value="{{ line.product_id }}">
+    <input type="hidden"
+           name="line_group_index[]"
+           value="{{ line.group_index }}"
+           class="receipt-row-group-index">
+    <input type="hidden"
+           class="receipt-row-current-price"
+           value="{{ line.product.price|default:'' }}">
     <input type="search"
            autocomplete="off"
            name="q"
@@ -62,7 +69,7 @@
          {% if is_first and line.product %}data-autofocus{% endif %}
          max="{{ max_units }}"
          value="{{ line.units }}"
-         @input="syncReceipt()">
+         @input="syncReceipt(); scheduleDraftSave()">
   <div class="sm:col-span-2">
     <input type="number"
            name="line_unit_cost[]"
@@ -72,7 +79,11 @@
            placeholder="Unit cost"
            aria-label="Unit cost for this line"
            value="{{ line.unit_cost }}"
-           @input="syncReceipt()">
+           @input="syncReceipt(); scheduleDraftSave()">
+    <span class="receipt-row-previous-cost mt-1 block text-[10px] text-slate-500 dark:text-slate-400"
+          {% if not line.product %}hidden{% endif %}>
+      Previous unit cost: GH₵ <span class="tnum">{{ line.product.cost|floatformat:2 }}</span>
+    </span>
   </div>
   <div class="sm:col-span-2">
     <input type="number"
@@ -83,7 +94,7 @@
            placeholder="New selling price (optional)"
            aria-label="New selling price for this line, blank to leave it"
            value="{{ line.selling_price }}"
-           @input="syncReceipt()">
+           @input="syncReceipt(); scheduleDraftSave()">
   </div>
   <button type="button"
           class="flex h-8 w-8 shrink-0 items-center justify-center self-start rounded-lg text-slate-400 transition-colors hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-950/60 sm:col-span-1 sm:justify-self-end"
@@ -100,6 +111,9 @@
                 data-preset="{{ preset }}"
                 @click="setReceiptUnits($el)">+{{ preset }}</button>
       {% endfor %}
+    </span>
+    <span class="receipt-row-duplicate hidden rounded-full bg-amber-100 px-2 py-0.5 font-semibold text-amber-800 dark:bg-amber-950/60 dark:text-amber-300">
+      Same product appears more than once for this supplier; check quantities and costs.
     </span>
     <span class="receipt-row-below-cost hidden rounded-full bg-rose-100 px-2 py-0.5 font-semibold uppercase text-rose-700 dark:bg-rose-950/60 dark:text-rose-400">below cost</span>
     <span class="receipt-row-over-cap hidden rounded-full bg-amber-100 px-2 py-0.5 font-semibold uppercase text-amber-700 dark:bg-amber-950/60 dark:text-amber-400">over the sellable cap</span>

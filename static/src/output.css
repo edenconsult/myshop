@@ -1176,11 +1176,6 @@ input:checked + .toggle-bg {
   margin-right: 2.5rem;
 }
 
-.mx-24 {
-  margin-left: 6rem;
-  margin-right: 6rem;
-}
-
 .mx-auto {
   margin-left: auto;
   margin-right: auto;
@@ -1257,10 +1252,6 @@ input:checked + .toggle-bg {
 
 .mt-1 {
   margin-top: 0.25rem;
-}
-
-.mt-12 {
-  margin-top: 3rem;
 }
 
 .mt-2 {
@@ -1437,8 +1428,16 @@ input:checked + .toggle-bg {
   max-height: calc(100vh - 13rem);
 }
 
+.min-h-\[30px\] {
+  min-height: 30px;
+}
+
 .min-h-\[32px\] {
   min-height: 32px;
+}
+
+.min-h-\[34px\] {
+  min-height: 34px;
 }
 
 .min-h-\[40px\] {
@@ -1779,6 +1778,14 @@ input:checked + .toggle-bg {
   scroll-margin-top: 6rem;
 }
 
+.list-decimal {
+  list-style-type: decimal;
+}
+
+.list-disc {
+  list-style-type: disc;
+}
+
 .appearance-none {
   -webkit-appearance: none;
      -moz-appearance: none;
@@ -1887,6 +1894,10 @@ input:checked + .toggle-bg {
 
 .gap-8 {
   gap: 2rem;
+}
+
+.gap-px {
+  gap: 1px;
 }
 
 .gap-x-2 {
@@ -2675,6 +2686,10 @@ input:checked + .toggle-bg {
   padding-left: 0.75rem;
 }
 
+.pl-5 {
+  padding-left: 1.25rem;
+}
+
 .pl-9 {
   padding-left: 2.25rem;
 }
@@ -2839,6 +2854,10 @@ input:checked + .toggle-bg {
 
 .text-\[32px\] {
   font-size: 32px;
+}
+
+.text-\[9px\] {
+  font-size: 9px;
 }
 
 .text-base {
@@ -4724,6 +4743,11 @@ select {
   border-color: rgb(244 63 94 / 0.3);
 }
 
+:is(.dark .dark\:border-rose-900) {
+  --tw-border-opacity: 1;
+  border-color: rgb(136 19 55 / var(--tw-border-opacity));
+}
+
 :is(.dark .dark\:border-rose-900\/50) {
   border-color: rgb(136 19 55 / 0.5);
 }
@@ -4766,6 +4790,10 @@ select {
   background-color: rgb(251 191 36 / var(--tw-bg-opacity));
 }
 
+:is(.dark .dark\:bg-amber-500\/10) {
+  background-color: rgb(245 158 11 / 0.1);
+}
+
 :is(.dark .dark\:bg-amber-950\/60) {
   background-color: rgb(69 26 3 / 0.6);
 }
@@ -4795,6 +4823,10 @@ select {
 
 :is(.dark .dark\:bg-emerald-950\/40) {
   background-color: rgb(2 44 34 / 0.4);
+}
+
+:is(.dark .dark\:bg-emerald-950\/50) {
+  background-color: rgb(2 44 34 / 0.5);
 }
 
 :is(.dark .dark\:bg-emerald-950\/60) {
@@ -4940,6 +4972,11 @@ select {
 
 :is(.dark .dark\:bg-opacity-80) {
   --tw-bg-opacity: 0.8;
+}
+
+:is(.dark .dark\:text-amber-300) {
+  --tw-text-opacity: 1;
+  color: rgb(252 211 77 / var(--tw-text-opacity));
 }
 
 :is(.dark .dark\:text-amber-400) {
@@ -5172,6 +5209,10 @@ select {
   background-color: rgb(76 5 25 / 0.4);
 }
 
+:is(.dark .dark\:hover\:bg-rose-950\/50:hover) {
+  background-color: rgb(76 5 25 / 0.5);
+}
+
 :is(.dark .dark\:hover\:bg-rose-950\/60:hover) {
   background-color: rgb(76 5 25 / 0.6);
 }
@@ -5295,6 +5336,18 @@ select {
 }
 
 @media (min-width: 640px) {
+  .sm\:sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border-width: 0;
+  }
+
   .sm\:col-span-1 {
     grid-column: span 1 / span 1;
   }
@@ -5319,10 +5372,6 @@ select {
     display: block;
   }
 
-  .sm\:flex {
-    display: flex;
-  }
-
   .sm\:grid {
     display: grid;
   }
@@ -5341,6 +5390,10 @@ select {
 
   .sm\:grid-cols-4 {
     grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .sm\:grid-cols-\[1fr_1fr_auto\] {
+    grid-template-columns: 1fr 1fr auto;
   }
 
   .sm\:flex-row {
@@ -5618,6 +5671,10 @@ select {
 
   .lg\:grid-cols-12 {
     grid-template-columns: repeat(12, minmax(0, 1fr));
+  }
+
+  .lg\:grid-cols-2 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .lg\:grid-cols-3 {

@@ -15,12 +15,16 @@ import uuid
 from decimal import Decimal
 from html.parser import HTMLParser
 from pathlib import Path
+from unittest.mock import patch
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
+from django.db import DatabaseError
 from django.db import migrations
 from django.db.migrations.loader import MigrationLoader
+from django.db.models import Sum
 from django.urls import NoReverseMatch, reverse
+from django.utils.formats import date_format
 from django.utils import timezone
 
 from core.checkout import SaleLine, checkout
@@ -30,7 +34,15 @@ from core.inventory import (
     _normalize_receipt_lines,
     receive_stock,
 )
-from core.models import Product, StockBatch, StockReceipt, StockReceiptSource
+from core.models import (
+    Product,
+    SaleBatchAllocation,
+    StockAdjustment,
+    StockBatch,
+    StockReceipt,
+    StockReceiptDraft,
+    StockReceiptSource,
+)
 from core.test_batch_ui import BatchUiTestCase
 
 
@@ -418,7 +430,7 @@ class ReceiptDialogTests(ReceiptPricingTestCase):
     def test_the_prefill_defaults_cost_from_the_catalogue_and_leaves_price_blank(self):
         response = self.dialog(self.bottle.pk)
         self.assertContains(response, 'value="4.00"')
-        self.assertContains(response, 'placeholder="no change"')
+        self.assertContains(response, 'placeholder="New selling price (optional)"')
         self.assertContains(response, f'value="{self.bottle.pk}"')
         html = response.content.decode()
         search = next(
@@ -577,6 +589,16 @@ class ReceiptDialogTests(ReceiptPricingTestCase):
         self.assertIn('value=""', html)
         self.assertContains(response, "Name or code")
 
+    def test_supplier_group_endpoint_returns_an_independent_group(self):
+        response = self.client.get(
+            reverse("core:receipt-supplier-group-blank"),
+            {"group_index": 1},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'data-group-index="1"')
+        self.assertContains(response, 'value="1"')
+        self.assertContains(response, "Add product to this supplier")
+
     def test_the_cashier_cannot_open_either_endpoint(self):
         self.client.force_login(self.cashier)
         self.assertEqual(self.dialog().status_code, 302)
@@ -615,6 +637,122 @@ class ReceivePostTests(ReceiptPricingTestCase):
         self.product.refresh_from_db()
         self.bottle.refresh_from_db()
         self.assertEqual((self.product.stock, self.bottle.price), (5, Decimal("9.00")))
+
+    def test_multiple_supplier_groups_book_separate_receipts_as_one_delivery(self):
+        response = self.client.post(
+            self.url(),
+            {
+                "request_key": str(uuid.uuid4()),
+                "purchased_on": "2026-10-31",
+                "supplier_name[]": ["Noble", "Market Runner"],
+                "external_reference[]": ["INV-9", "GRN-2"],
+                "supplier_group_index[]": ["0", "1"],
+                "line_group_index[]": ["0", "1"],
+                "line_product_id[]": [str(self.product.pk), str(self.bottle.pk)],
+                "line_units[]": ["4", "6"],
+                "line_unit_cost[]": ["10.00", "5.00"],
+                "line_selling_price[]": ["", "9.00"],
+            },
+        )
+        self.assertContains(response, "booked across 2 receipt(s)")
+        receipts = list(
+            self.booked_receipts().filter(supplier_name__in=["Noble", "Market Runner"])
+        )
+        self.assertEqual(len(receipts), 2)
+        self.assertEqual(
+            {(receipt.supplier_name, receipt.external_reference) for receipt in receipts},
+            {("Noble", "INV-9"), ("Market Runner", "GRN-2")},
+        )
+        self.product.refresh_from_db()
+        self.bottle.refresh_from_db()
+        self.assertEqual((self.product.stock, self.bottle.stock), (4, 6))
+        self.assertEqual(self.bottle.price, Decimal("9.00"))
+
+    def test_a_failure_in_a_later_supplier_rolls_back_the_whole_delivery(self):
+        Product.objects.filter(pk=self.bottle.pk).update(stock=99)
+        response = self.client.post(
+            self.url(),
+            {
+                "request_key": str(uuid.uuid4()),
+                "supplier_name[]": ["Noble", "Market Runner"],
+                "external_reference[]": ["INV-9", "GRN-2"],
+                "supplier_group_index[]": ["0", "1"],
+                "line_group_index[]": ["0", "1"],
+                "line_product_id[]": [str(self.product.pk), str(self.bottle.pk)],
+                "line_units[]": ["4", "6"],
+                "line_unit_cost[]": ["10.00", "5.00"],
+                "line_selling_price[]": ["", ""],
+            },
+        )
+        self.assertContains(response, "Inventory is inconsistent")
+        self.assertFalse(self.booked_receipts().filter(supplier_name="Noble").exists())
+        self.product.refresh_from_db()
+        self.assertEqual(self.product.stock, 0)
+
+    def test_service_errors_in_later_supplier_groups_keep_global_row_numbers(self):
+        response = self.client.post(
+            self.url(),
+            {
+                "request_key": str(uuid.uuid4()),
+                "supplier_name[]": ["Noble", "Market Runner"],
+                "external_reference[]": ["", ""],
+                "supplier_group_index[]": ["0", "1"],
+                "line_group_index[]": ["0", "1"],
+                "line_product_id[]": [str(self.product.pk), str(self.bottle.pk)],
+                "line_units[]": ["4", "6"],
+                "line_unit_cost[]": ["10.00", "5.00"],
+                "line_selling_price[]": ["", "0.00"],
+            },
+        )
+        self.assertContains(response, "Line 2: selling price")
+        self.assertEqual(self.booked_receipts().count(), 0)
+        self.product.refresh_from_db()
+        self.assertEqual(self.product.stock, 0)
+
+    def test_replaying_a_multi_supplier_delivery_does_not_duplicate_receipts(self):
+        payload = {
+            "request_key": str(uuid.uuid4()),
+            "supplier_name[]": ["Noble", "Market Runner"],
+            "external_reference[]": ["", ""],
+            "supplier_group_index[]": ["0", "1"],
+            "line_group_index[]": ["0", "1"],
+            "line_product_id[]": [str(self.product.pk), str(self.bottle.pk)],
+            "line_units[]": ["4", "6"],
+            "line_unit_cost[]": ["10.00", "5.00"],
+            "line_selling_price[]": ["", ""],
+        }
+        self.client.post(self.url(), payload)
+        self.client.post(self.url(), payload)
+        self.assertEqual(
+            self.booked_receipts().filter(
+                supplier_name__in=["Noble", "Market Runner"]
+            ).count(),
+            2,
+        )
+
+    def test_reusing_a_delivery_key_with_changed_groups_is_refused(self):
+        key = str(uuid.uuid4())
+        payload = {
+            "request_key": key,
+            "supplier_name[]": ["Noble", "Market Runner"],
+            "external_reference[]": ["INV-9", "GRN-2"],
+            "supplier_group_index[]": ["0", "1"],
+            "line_group_index[]": ["0", "1"],
+            "line_product_id[]": [str(self.product.pk), str(self.bottle.pk)],
+            "line_units[]": ["4", "6"],
+            "line_unit_cost[]": ["10.00", "5.00"],
+            "line_selling_price[]": ["", ""],
+        }
+        self.client.post(self.url(), payload)
+        payload["external_reference[]"] = ["INV-CHANGED", "GRN-2"]
+        response = self.client.post(self.url(), payload)
+        self.assertContains(response, "request key was already used for different data")
+        self.assertEqual(
+            self.booked_receipts().filter(supplier_name__in=["Noble", "Market Runner"]).count(),
+            2,
+        )
+        self.product.refresh_from_db()
+        self.assertEqual(self.product.stock, 4)
 
     def test_a_blank_price_is_no_change_not_a_free_product(self):
         self.post([(self.product.pk, 4, "10.00", "")])
@@ -690,7 +828,7 @@ class ReceivePostTests(ReceiptPricingTestCase):
         # the row partial prints a chosen name as text, never as an input value
         self.assertIn("Shea Repair Balm", html)
         self.assertIn("Bottle Gargle", html)
-        self.assertIn('placeholder="no change"', html)
+        self.assertIn('placeholder="New selling price (optional)"', html)
         self.assertContains(response, "Nothing was saved")
         self.assertContains(response, "Line 2: selling price")
         self.assertNotContains(response, "Reopen the stock dialog")
@@ -743,6 +881,279 @@ class ReceivePostTests(ReceiptPricingTestCase):
         self.assertContains(response, 'name="line_product_id[]"')
 
 
+class ReceiptDraftTests(ReceiptPricingTestCase):
+    def save_url(self):
+        return reverse("core:save-receipt-draft")
+
+    def payload(self):
+        return {
+            "purchased_on": "2026-10-31",
+            "groups": [
+                {
+                    "supplier_name": "Noble",
+                    "external_reference": "INV-9",
+                    "lines": [
+                        {
+                            "product_id": str(self.product.pk),
+                            "units": "4",
+                            "unit_cost": "10.00",
+                            "selling_price": "",
+                        }
+                    ],
+                },
+                {
+                    "supplier_name": "Market Runner",
+                    "external_reference": "GRN-2",
+                    "lines": [
+                        {
+                            "product_id": str(self.bottle.pk),
+                            "units": "6",
+                            "unit_cost": "5.00",
+                            "selling_price": "9.00",
+                        }
+                    ],
+                },
+            ],
+        }
+
+    def save(self, payload=None, draft_id=""):
+        return self.client.post(
+            self.save_url(),
+            {
+                "draft_id": str(draft_id),
+                "draft_payload": json.dumps(payload or self.payload()),
+            },
+        )
+
+    def test_autosaving_a_draft_does_not_change_stock_cost_or_price(self):
+        response = self.save()
+        self.assertEqual(response.status_code, 200, response.content)
+        draft = StockReceiptDraft.objects.get(pk=response.json()["id"])
+        self.assertEqual(draft.payload["groups"][1]["supplier_name"], "Market Runner")
+        self.assertIsNone(draft.booked_at)
+        self.assertEqual(self.booked_receipts().count(), 0)
+        self.product.refresh_from_db()
+        self.bottle.refresh_from_db()
+        self.assertEqual((self.product.stock, self.product.cost), (0, Decimal("9.00")))
+        self.assertEqual((self.bottle.stock, self.bottle.price), (0, Decimal("7.50")))
+
+    def test_saving_an_existing_draft_returns_its_updated_display_time(self):
+        draft = StockReceiptDraft.objects.create(
+            recorded_by=self.admin,
+            payload=self.payload(),
+        )
+
+        response = self.save(
+            {"purchased_on": "2026-10-31", "groups": self.payload()["groups"]},
+            draft.pk,
+        )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        draft.refresh_from_db()
+        self.assertEqual(
+            response.json()["updated_at_display"],
+            date_format(timezone.localtime(draft.updated_at), "d M Y H:i"),
+        )
+
+    def test_draft_can_be_resumed_with_supplier_groups_and_lines(self):
+        draft = StockReceiptDraft.objects.create(
+            recorded_by=self.admin,
+            payload=self.payload(),
+        )
+        response = self.client.get(
+            reverse("core:receive-stock-question"),
+            {"draft_id": str(draft.pk)},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'value="Noble"')
+        self.assertContains(response, 'value="Market Runner"')
+        self.assertContains(response, f'value="{self.product.pk}"')
+        self.assertContains(response, f'value="{self.bottle.pk}"')
+
+    def test_booking_a_draft_books_all_supplier_receipts_and_is_idempotent(self):
+        draft = StockReceiptDraft.objects.create(
+            recorded_by=self.admin,
+            payload=self.payload(),
+        )
+        post_data = {
+            "draft_id": str(draft.pk),
+            "request_key": str(uuid.uuid4()),
+            "purchased_on": "2026-10-31",
+            "supplier_name[]": ["Noble", "Market Runner"],
+            "external_reference[]": ["INV-9", "GRN-2"],
+            "supplier_group_index[]": ["0", "1"],
+            "line_group_index[]": ["0", "1"],
+            "line_product_id[]": [str(self.product.pk), str(self.bottle.pk)],
+            "line_units[]": ["4", "6"],
+            "line_unit_cost[]": ["10.00", "5.00"],
+            "line_selling_price[]": ["", "9.00"],
+        }
+        first = self.client.post(reverse("core:receive-stock-question"), post_data)
+        self.assertContains(first, "booked across 2 receipt(s)")
+        triggers = json.loads(first["HX-Trigger"])
+        self.assertIn("reload_stock_receipts", triggers)
+        self.assertIn("reload_products_table", triggers)
+        draft.refresh_from_db()
+        receipts = list(draft.receipts.order_by("draft_group_index"))
+        self.assertIsNotNone(draft.booked_at)
+        self.assertEqual([receipt.draft_group_index for receipt in receipts], [0, 1])
+        self.assertEqual(
+            [receipt.supplier_name for receipt in receipts],
+            ["Noble", "Market Runner"],
+        )
+        register = self.client.get(reverse("core:stock-receipts"))
+        self.assertNotContains(register, f'data-receipt-draft-id="{draft.pk}"')
+        self.assertContains(register, "Noble")
+        self.assertContains(register, "Market Runner")
+        self.assertContains(register, 'addEventListener("reload_stock_receipts"')
+
+        stale_modal = self.client.get(
+            reverse("core:receive-stock-question"),
+            {"draft_id": str(draft.pk)},
+            headers={"hx-request": "true"},
+        )
+        self.assertEqual(stale_modal.status_code, 200)
+        self.assertContains(stale_modal, "booked across 2 receipt(s)")
+
+        stale_modal_url = self.client.get(
+            reverse("core:receive-stock-question"),
+            {"draft_id": str(draft.pk)},
+        )
+        self.assertRedirects(stale_modal_url, reverse("core:stock-receipts"))
+
+        stale_link = self.client.get(
+            reverse("core:products"),
+            {"draft_id": str(draft.pk)},
+        )
+        self.assertRedirects(stale_link, reverse("core:stock-receipts"))
+        self.assertEqual(
+            self.client.post(reverse("core:receive-stock-question"), post_data).status_code,
+            200,
+        )
+        self.assertEqual(draft.receipts.count(), 2)
+        self.product.refresh_from_db()
+        self.bottle.refresh_from_db()
+        self.assertEqual((self.product.stock, self.bottle.stock), (4, 6))
+
+    def test_database_failure_rolls_back_every_supplier_receipt(self):
+        draft = StockReceiptDraft.objects.create(
+            recorded_by=self.admin,
+            payload=self.payload(),
+        )
+        post_data = {
+            "draft_id": str(draft.pk),
+            "request_key": str(uuid.uuid4()),
+            "purchased_on": "2026-10-31",
+            "supplier_name[]": ["Noble", "Market Runner"],
+            "external_reference[]": ["INV-9", "GRN-2"],
+            "supplier_group_index[]": ["0", "1"],
+            "line_group_index[]": ["0", "1"],
+            "line_product_id[]": [str(self.product.pk), str(self.bottle.pk)],
+            "line_units[]": ["4", "6"],
+            "line_unit_cost[]": ["10.00", "5.00"],
+            "line_selling_price[]": ["", "9.00"],
+        }
+        real_receive_stock = receive_stock
+        calls = 0
+
+        def fail_second_receipt(**kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise DatabaseError("simulated database disconnect")
+            return real_receive_stock(**kwargs)
+
+        with (
+            patch("core.batch_views.receive_stock", side_effect=fail_second_receipt),
+            self.assertLogs("core.batch_views", level="ERROR"),
+        ):
+            response = self.client.post(reverse("core:receive-stock-question"), post_data)
+
+        self.assertContains(response, "The receipt could not be saved. Try again.")
+        draft.refresh_from_db()
+        self.assertIsNone(draft.booked_at)
+        self.assertEqual(draft.receipts.count(), 0)
+        self.assertEqual(self.booked_receipts().count(), 0)
+        self.product.refresh_from_db()
+        self.bottle.refresh_from_db()
+        self.assertEqual((self.product.stock, self.bottle.stock), (0, 0))
+
+    def test_draft_save_is_owner_scoped_and_invalid_payload_is_rejected(self):
+        draft = StockReceiptDraft.objects.create(
+            recorded_by=self.admin,
+            payload=self.payload(),
+        )
+        invalid = self.save({"purchased_on": "", "groups": []})
+        self.assertEqual(invalid.status_code, 400)
+        self.client.force_login(self.cashier)
+        hidden = self.client.post(
+            self.save_url(),
+            {
+                "draft_id": str(draft.pk),
+                "draft_payload": json.dumps(self.payload()),
+            },
+        )
+        self.assertEqual(hidden.status_code, 302)
+        self.client.force_login(self.admin)
+        forbidden = self.save(self.payload(), uuid.uuid4())
+        self.assertEqual(forbidden.status_code, 404)
+        draft.refresh_from_db()
+        self.assertEqual(draft.payload["groups"][0]["supplier_name"], "Noble")
+
+    def test_delete_removes_an_unbooked_draft(self):
+        draft = StockReceiptDraft.objects.create(
+            recorded_by=self.admin,
+            payload=self.payload(),
+        )
+        response = self.client.post(
+            reverse("core:delete-receipt-draft", args=[draft.pk])
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(StockReceiptDraft.objects.filter(pk=draft.pk).exists())
+        self.assertEqual(self.booked_receipts().count(), 0)
+
+    def test_draft_is_available_from_the_stock_receipts_register(self):
+        draft = StockReceiptDraft.objects.create(
+            recorded_by=self.admin,
+            payload=self.payload(),
+        )
+        response = self.client.get(reverse("core:stock-receipts"))
+        self.assertContains(response, "Delivery drafts")
+        self.assertContains(response, "Noble, Market Runner")
+        self.assertContains(response, f'data-receipt-draft-id="{draft.pk}"')
+        self.assertContains(response, "receipt-draft-updated-at")
+        self.assertContains(response, "Continue")
+        self.assertContains(
+            response,
+            f'href="{reverse("core:products")}?draft_id={draft.pk}"',
+        )
+        self.assertContains(
+            response,
+            f'hx-get="{reverse("core:receive-stock-question")}?draft_id={draft.pk}"',
+        )
+        self.assertContains(response, 'addEventListener("reload_stock_receipts"')
+        self.assertContains(response, 'hx-target="#modal_root"')
+        self.assertEqual(len(response.context["drafts"]), 1)
+
+    def test_products_page_can_resume_a_draft_from_the_continue_link_fallback(self):
+        draft = StockReceiptDraft.objects.create(
+            recorded_by=self.admin,
+            payload=self.payload(),
+        )
+
+        response = self.client.get(
+            reverse("core:products"),
+            {"draft_id": str(draft.pk)},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(
+            response,
+            f'hx-get="{reverse("core:receive-stock-question")}?draft_id={draft.pk}"',
+        )
+        self.assertContains(response, 'id="modal_root"')
+
+
 class EntryPointsTests(ReceiptPricingTestCase):
     def test_the_old_single_product_endpoint_is_gone(self):
         with self.assertRaises(NoReverseMatch):
@@ -765,6 +1176,68 @@ class EntryPointsTests(ReceiptPricingTestCase):
         )
         self.assertContains(response, "Receive Delivery")
 
+    def test_batch_restock_action_is_only_offered_in_the_depleted_view(self):
+        response = self.client.get(
+            reverse("core:load-products"), {"l": 10, "p": 1, "status": "out_of_stock"}
+        )
+        self.assertContains(
+            response, f'hx-post="{reverse("core:receive-selected-stock-question")}"'
+        )
+        self.assertContains(response, "Restock selected")
+
+        response = self.client.get(
+            reverse("core:load-products"), {"l": 10, "p": 1, "status": "all"}
+        )
+        self.assertNotContains(response, "Restock selected")
+
+    def test_batch_restock_prefills_selected_depleted_products(self):
+        response = self.client.post(
+            reverse("core:receive-selected-stock-question"),
+            {"ids": [str(self.product.pk), str(self.bottle.pk)]},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Batch Restock")
+        self.assertContains(response, "2 Selected Products")
+        self.assertContains(response, f'value="{self.product.pk}"')
+        self.assertContains(response, f'value="{self.bottle.pk}"')
+        self.assertContains(response, 'value="9.00"')
+        self.assertContains(response, 'value="4.00"')
+        self.assertEqual(response.content.decode().count('class="receipt-row '), 2)
+        self.assertNotRegex(
+            response.content.decode(), r'name="line_units\[\]"[^>]*value="[^"]+"'
+        )
+
+    def test_batch_restock_refuses_products_that_are_no_longer_depleted(self):
+        replenished = Product.objects.create(
+            name="Replenished Product",
+            stock=3,
+            cost=Decimal("2.00"),
+            price=Decimal("5.00"),
+            profit_rate=Decimal("0.60"),
+        )
+        response = self.client.post(
+            reverse("core:receive-selected-stock-question"),
+            {"ids": [str(self.product.pk), str(replenished.pk)]},
+        )
+
+        self.assertContains(
+            response,
+            "Some selected products could not be found or are no longer depleted",
+        )
+        self.assertNotContains(response, f'value="{self.product.pk}"')
+        self.assertNotContains(response, f'value="{replenished.pk}"')
+
+    def test_batch_restock_rejects_selections_over_the_dialog_limit(self):
+        with patch("core.batch_views.MAX_RECEIPT_DIALOG_ROWS", 1):
+            response = self.client.post(
+                reverse("core:receive-selected-stock-question"),
+                {"ids": [str(self.product.pk), str(self.bottle.pk)]},
+            )
+
+        self.assertContains(response, "Batch restock supports up to 1 selected product.")
+        self.assertEqual(response.content.decode().count('class="receipt-row '), 1)
+
     def test_the_old_dialog_template_is_gone(self):
         path = (
             Path(settings.BASE_DIR)
@@ -776,3 +1249,83 @@ class EntryPointsTests(ReceiptPricingTestCase):
             / "restock_product.html"
         )
         self.assertFalse(path.exists(), "two restock dialogs is two answers to one question")
+
+
+class RepriceThenSellTests(ReceiptPricingTestCase):
+    """The sweep: a delivery that changes a price must sell at the new price,
+    and the batch invariant must survive it."""
+
+    def test_a_delivery_that_reprices_a_product_makes_the_next_sale_pay_the_new_price(self):
+        self.book(
+            [
+                ReceiptLine(self.product.pk, 10, Decimal("10.00"), Decimal("20.00")),
+                ReceiptLine(self.bottle.pk, 5, Decimal("5.00"), Decimal("8.00")),
+            ]
+        )
+        checkout(
+            actor=self.admin,
+            request_key=uuid.uuid4(),
+            lines=[
+                SaleLine(self.product.pk, 2, Decimal("40.00")),
+                SaleLine(self.bottle.pk, 1, Decimal("8.00")),
+            ],
+        )
+        self.product.refresh_from_db()
+        self.bottle.refresh_from_db()
+        self.assertEqual((self.product.stock, self.bottle.stock), (8, 4))
+
+    def test_the_invariant_survives_a_reprice(self):
+        """check_inventory's own rule: remaining == received + adjusted - sold.
+
+        Both aggregates are hoisted into their own names -- `x + a or 0` binds as
+        `(x + a) or 0`, which would pass on any truthy number and hide a real drift.
+        """
+        self.book(
+            [ReceiptLine(self.product.pk, 10, Decimal("10.00"), Decimal("20.00"))]
+        )
+        for batch in StockBatch.objects.all():
+            adjusted = (
+                StockAdjustment.objects.filter(batch=batch).aggregate(
+                    total=Sum("quantity_delta")
+                )["total"]
+                or 0
+            )
+            sold = (
+                SaleBatchAllocation.objects.filter(batch=batch).aggregate(
+                    total=Sum("quantity")
+                )["total"]
+                or 0
+            )
+            self.assertEqual(
+                batch.quantity_remaining,
+                batch.quantity_received + adjusted - sold,
+            )
+
+    def test_the_dialog_survives_a_product_name_full_of_quotes(self):
+        """The one place a catalogue name reaches markup the browser compiles.
+
+        The row prints the name as text, so escaping is Django's job; what this
+        pins is that no directive attribute ever carried it -- a raw ``"`` there
+        closes the attribute and hands the rest of the name to the parser.
+        """
+        awkward = Product.objects.create(
+            name='O\'Neil "Reserve" Balm',
+            sku="ONE1",
+            stock=0,
+            cost=Decimal("1.00"),
+            price=Decimal("2.00"),
+            profit_rate=Decimal("0.50"),
+        )
+        response = self.client.get(
+            reverse("core:receive-stock-question"), {"product_id": awkward.pk}
+        )
+        html = response.content.decode()
+
+        self.assertContains(response, "Reserve")
+        for _tag, attributes in self.elements_with_attributes(html):
+            for name, value in attributes.items():
+                if name.startswith(self.JS_ATTRIBUTE_PREFIXES):
+                    self.assertNotIn(
+                        '"', value, f"{name} would close its own attribute"
+                    )
+        compile_js(self, html, **{"x-data": "expression"})

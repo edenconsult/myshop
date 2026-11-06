@@ -8,15 +8,16 @@ and non-admin requests both leave through a 302.
 """
 
 import datetime as dt
+import json
 import logging
 import re
 from decimal import Decimal, InvalidOperation
-from uuid import UUID
+from uuid import UUID, uuid5
 
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.core.exceptions import ValidationError
 from django.core.paginator import Paginator
-from django.db import DatabaseError
+from django.db import DatabaseError, transaction
 from django.db.models import (
     Count,
     DecimalField,
@@ -29,9 +30,11 @@ from django.db.models import (
     Sum,
 )
 from django.db.models.functions import Coalesce
-from django.shortcuts import get_object_or_404, render
+from django.http import JsonResponse
+from django.shortcuts import get_object_or_404, redirect, render
+from django.utils.formats import date_format
 from django.utils import timezone
-from django.views.decorators.http import require_GET
+from django.views.decorators.http import require_GET, require_POST
 from django_htmx.http import trigger_client_event
 
 from core.inventory import (
@@ -44,6 +47,7 @@ from core.models import (
     SaleBatchAllocation,
     StockAdjustment,
     StockBatch,
+    StockReceiptDraft,
     StockReceipt,
     StockReceiptSource,
 )
@@ -68,6 +72,7 @@ BATCH_VALUE = DecimalField(max_digits=24, decimal_places=2)
 # the picker returns a page of options, not a catalogue: twenty is what a
 # dialog's dropdown can be scanned without the owner scrolling.
 RECEIPT_SEARCH_RESULTS = 20
+MAX_RECEIPT_SUPPLIER_GROUPS = 20
 
 # was core/views.MAX_RESTOCK_UNITS: a per-line input ceiling for the dialog, not
 # a service rule -- the service's own ceilings stay MAX_QUANTITY / MAX_RECEIPT_LINES.
@@ -77,7 +82,13 @@ RECEIPT_UNIT_PRESETS = (12, 24, 48, 100)
 
 
 def _line_context(
-    product_id="", product=None, units="", unit_cost="", selling_price="", error=False
+    product_id="",
+    product=None,
+    units="",
+    unit_cost="",
+    selling_price="",
+    group_index=0,
+    error=False,
 ):
     """One receipt line as the row partial reads it: flat, all keys present.
 
@@ -91,24 +102,52 @@ def _line_context(
         "units": units,
         "unit_cost": unit_cost,
         "selling_price": selling_price,
+        "group_index": group_index,
         "error": error,
     }
 
 
-def _dialog_context(request, *, lines=None, request_key="", message="", posted=None):
+def _supplier_group_context(
+    group_index=0,
+    *,
+    supplier_name="",
+    external_reference="",
+    lines=None,
+):
+    return {
+        "group_index": group_index,
+        "supplier_name": supplier_name,
+        "external_reference": external_reference,
+        "lines": lines if lines is not None else [_line_context(group_index=group_index)],
+    }
+
+
+def _dialog_context(
+    request,
+    *,
+    groups=None,
+    request_key="",
+    message="",
+    draft_id="",
+    purchased_on="",
+    selected_restock=False,
+    selected_count=0,
+):
     context = {
-        "lines": lines if lines is not None else [_line_context()],
+        "groups": groups if groups is not None else [_supplier_group_context()],
         "request_key": request_key,
         "message": message,
+        "draft_id": draft_id,
+        "purchased_on": purchased_on,
+        "selected_restock": selected_restock,
+        "selected_count": selected_count,
         "max_units": MAX_RECEIPT_LINE_UNITS,
         "max_rows": MAX_RECEIPT_DIALOG_ROWS,
+        "max_groups": MAX_RECEIPT_SUPPLIER_GROUPS,
         "price_cap": MAX_SELLING_PRICE,
         "presets": RECEIPT_UNIT_PRESETS,
     }
-    if posted is not None:
-        context["posted_supplier_name"] = posted.get("supplier_name", "")
-        context["posted_external_reference"] = posted.get("external_reference", "")
-        context["posted_purchased_on"] = posted.get("purchased_on", "")
+    context["line_count"] = sum(len(group["lines"]) for group in context["groups"])
     return context
 
 
@@ -270,7 +309,26 @@ def stock_receipts(request):
     except (TypeError, ValueError):
         pass
     page = Paginator(receipts, 25).get_page(requested_page)
-    return render(request, "core/inventory/receipts.html", {"page_obj": page})
+    drafts = list(
+        StockReceiptDraft.objects.filter(
+            recorded_by=request.user,
+            booked_at__isnull=True,
+        ).order_by("-updated_at")
+    )
+    for draft in drafts:
+        groups = draft.payload.get("groups", [])
+        draft.supplier_count = len(groups)
+        draft.line_count = sum(len(group.get("lines", [])) for group in groups)
+        draft.supplier_summary = ", ".join(
+            group.get("supplier_name", "").strip()
+            for group in groups
+            if group.get("supplier_name", "").strip()
+        ) or "Supplier not entered"
+    return render(
+        request,
+        "core/inventory/receipts.html",
+        {"page_obj": page, "drafts": drafts},
+    )
 
 
 @login_required
@@ -343,6 +401,13 @@ class _ReceiptLineProblem(Exception):
     or too many of them.
     """
 
+    def __init__(self, row, message):
+        super().__init__(message)
+        self.row = row
+        self.message = message
+
+
+class _ReceiptBookingProblem(Exception):
     def __init__(self, row, message):
         super().__init__(message)
         self.row = row
@@ -422,6 +487,10 @@ def _read_receipt_lines(request):
             unit_cost = Decimal(raw_cost)
         except InvalidOperation:
             raise _ReceiptLineProblem(row, f"Line {row} has an unreadable unit cost.") from None
+        if not unit_cost.is_finite():
+            raise _ReceiptLineProblem(row, f"Line {row} has an unreadable unit cost.")
+        if abs(unit_cost) > Decimal("99999999.99"):
+            raise _ReceiptLineProblem(row, f"Line {row} has a unit cost that is too large.")
         selling_price = None
         if raw_price:
             try:
@@ -430,6 +499,14 @@ def _read_receipt_lines(request):
                 raise _ReceiptLineProblem(
                     row, f"Line {row} has an unreadable selling price."
                 ) from None
+            if not selling_price.is_finite():
+                raise _ReceiptLineProblem(
+                    row, f"Line {row} has an unreadable selling price."
+                )
+            if selling_price < -MAX_SELLING_PRICE:
+                raise _ReceiptLineProblem(
+                    row, f"Line {row} has an invalid selling price."
+                )
             if selling_price > MAX_SELLING_PRICE:
                 raise _ReceiptLineProblem(
                     row,
@@ -438,6 +515,75 @@ def _read_receipt_lines(request):
                 )
         lines.append(ReceiptLine(UUID(product_id), quantity, unit_cost, selling_price))
     return lines
+
+
+def _read_receipt_groups(request):
+    """Validate supplier headers and assign every product line to its supplier."""
+    supplier_names = request.POST.getlist("supplier_name[]")
+    references = request.POST.getlist("external_reference[]")
+    raw_group_ids = request.POST.getlist("supplier_group_index[]")
+    if not supplier_names and "supplier_name" in request.POST:
+        supplier_names = [request.POST.get("supplier_name", "")]
+    if not references and "external_reference" in request.POST:
+        references = [request.POST.get("external_reference", "")]
+    if not supplier_names:
+        supplier_names = [""]
+    if not references:
+        references = [""]
+    if not raw_group_ids:
+        raw_group_ids = [str(index) for index in range(len(supplier_names))]
+    if len(supplier_names) != len(references):
+        raise _ReceiptLineProblem(
+            0, "Supplier details arrived incomplete. Review the delivery and try again."
+        )
+    if len(raw_group_ids) != len(supplier_names):
+        raise _ReceiptLineProblem(
+            0, "Supplier groups arrived incomplete. Review the delivery and try again."
+        )
+    if len(supplier_names) > MAX_RECEIPT_SUPPLIER_GROUPS:
+        raise _ReceiptLineProblem(
+            0, f"A delivery can have at most {MAX_RECEIPT_SUPPLIER_GROUPS} suppliers."
+        )
+
+    try:
+        group_ids = [int(value) for value in raw_group_ids]
+    except (TypeError, ValueError):
+        raise _ReceiptLineProblem(0, "A supplier group has an invalid identifier.") from None
+    if (
+        len(set(group_ids)) != len(group_ids)
+        or any(index < 0 or index >= MAX_RECEIPT_SUPPLIER_GROUPS for index in group_ids)
+    ):
+        raise _ReceiptLineProblem(0, "A supplier group has an invalid identifier.")
+    group_positions = {group_id: position for position, group_id in enumerate(group_ids)}
+
+    raw_indexes = request.POST.getlist("line_group_index[]")
+    raw_line_ids = request.POST.getlist("line_product_id[]")
+    if not raw_indexes:
+        raw_indexes = ["0"] * len(raw_line_ids)
+    if len(raw_indexes) != len(raw_line_ids):
+        raise _ReceiptLineProblem(
+            0, "Supplier line assignments arrived incomplete. Review and try again."
+        )
+    try:
+        indexes = [int(value) for value in raw_indexes]
+    except (TypeError, ValueError):
+        raise _ReceiptLineProblem(0, "A line has an invalid supplier assignment.") from None
+    if any(index not in group_positions for index in indexes):
+        raise _ReceiptLineProblem(0, "A line has an invalid supplier assignment.")
+
+    lines = _read_receipt_lines(request)
+    groups = [
+        {
+            "supplier_name": supplier_names[index].strip(),
+            "external_reference": references[index].strip(),
+            "group_index": group_ids[index],
+            "lines": [],
+        }
+        for index in range(len(supplier_names))
+    ]
+    for index, line in zip(indexes, lines):
+        groups[group_positions[index]]["lines"].append(line)
+    return [group for group in groups if group["lines"]]
 
 
 def _describe_service_error(error):
@@ -470,8 +616,8 @@ def _describe_service_error(error):
     return 0, error.messages[0]
 
 
-def _posted_lines(request, error_row=0):
-    """The rows the owner typed, back into row-partial contexts.
+def _posted_groups(request, error_row=0):
+    """The supplier groups and rows the owner typed, back into template contexts.
 
     A product id that no longer resolves keeps its raw value in the hidden
     field and shows no name, so the owner sees exactly what is wrong rather
@@ -481,6 +627,40 @@ def _posted_lines(request, error_row=0):
     units = request.POST.getlist("line_units[]")
     costs = request.POST.getlist("line_unit_cost[]")
     prices = request.POST.getlist("line_selling_price[]")
+    supplier_names = request.POST.getlist("supplier_name[]") or [
+        request.POST.get("supplier_name", "")
+    ]
+    references = request.POST.getlist("external_reference[]") or [
+        request.POST.get("external_reference", "")
+    ]
+    raw_indexes = request.POST.getlist("line_group_index[]") or ["0"] * len(product_ids)
+    raw_group_ids = request.POST.getlist("supplier_group_index[]") or [
+        str(index) for index in range(len(supplier_names))
+    ]
+    try:
+        group_indexes = [int(value) for value in raw_indexes]
+    except (ValueError, TypeError):
+        group_indexes = [0] * len(product_ids)
+    try:
+        group_ids = [int(value) for value in raw_group_ids]
+    except (ValueError, TypeError):
+        group_ids = list(range(len(supplier_names)))
+    group_ids.extend(
+        index
+        for index in sorted(set(group_indexes))
+        if index not in group_ids
+    )
+    group_ids = group_ids[:MAX_RECEIPT_SUPPLIER_GROUPS]
+    group_positions = {group_id: index for index, group_id in enumerate(group_ids)}
+    groups = [
+        _supplier_group_context(
+            group_id,
+            supplier_name=supplier_names[index] if index < len(supplier_names) else "",
+            external_reference=references[index] if index < len(references) else "",
+            lines=[],
+        )
+        for index, group_id in enumerate(group_ids)
+    ]
     parsed = []
     for raw_id in product_ids:
         try:
@@ -497,6 +677,8 @@ def _posted_lines(request, error_row=0):
     for index, (raw_id, pk, raw_units, raw_cost, raw_price) in enumerate(
         zip(product_ids, parsed, units, costs, prices), start=1
     ):
+        raw_group_index = group_indexes[index - 1] if index - 1 < len(group_indexes) else 0
+        group_index = group_positions.get(raw_group_index, 0)
         rows.append(
             _line_context(
                 product_id=raw_id,
@@ -504,16 +686,48 @@ def _posted_lines(request, error_row=0):
                 units=raw_units,
                 unit_cost=raw_cost,
                 selling_price=raw_price,
+                group_index=groups[group_index]["group_index"],
                 error=(index == error_row),
             )
         )
-    return rows or [_line_context()]
+    for row in rows:
+        groups[group_positions.get(row["group_index"], 0)]["lines"].append(row)
+    for group in groups:
+        if not group["lines"]:
+            group["lines"].append(_line_context(group_index=group["group_index"]))
+    return groups
+
+
+def _booking_payload(purchased_on, groups):
+    return {
+        "purchased_on": purchased_on.isoformat() if purchased_on else "",
+        "groups": [
+            {
+                "supplier_name": group["supplier_name"],
+                "external_reference": group["external_reference"],
+                "lines": [
+                    {
+                        "product_id": str(line.product_id),
+                        "units": line.quantity,
+                        "unit_cost": format(line.unit_cost.quantize(Decimal("0.01")), ".2f"),
+                        "selling_price": (
+                            format(line.selling_price.quantize(Decimal("0.01")), ".2f")
+                            if line.selling_price is not None
+                            else ""
+                        ),
+                    }
+                    for line in group["lines"]
+                ],
+            }
+            for group in groups
+        ],
+    }
 
 
 def _book_receipt(request):
-    """One post is one receipt, or nothing at all (spec decision 3)."""
+    """Book all supplier receipts together, or none of them."""
     try:
-        lines = _read_receipt_lines(request)
+        groups = _read_receipt_groups(request)
     except _ReceiptLineProblem as problem:
         return _refused(request, problem.row, problem.message)
 
@@ -524,33 +738,164 @@ def _book_receipt(request):
         return _refused(request, 0, "Enter a purchase date as YYYY-MM-DD, or leave it empty.")
 
     try:
-        receipt = receive_stock(
-            actor=request.user,
-            request_key=_posted_request_key(request),
-            lines=lines,
-            received_at=timezone.now(),
-            source=StockReceiptSource.PURCHASE,
-            purchased_on=purchased_on,
-            supplier_name=request.POST.get("supplier_name", ""),
-            external_reference=request.POST.get("external_reference", ""),
-        )
+        request_key = _posted_request_key(request)
+        draft_id = request.POST.get("draft_id", "").strip()
+        booking_payload = _booking_payload(purchased_on, groups)
+        with transaction.atomic():
+            draft = None
+            legacy_replay = False
+            if draft_id:
+                try:
+                    draft_uuid = UUID(draft_id)
+                except (ValueError, TypeError):
+                    return _refused(request, 0, "This saved draft could not be found.")
+                draft = (
+                    StockReceiptDraft.objects.select_for_update()
+                    .filter(pk=draft_uuid, recorded_by=request.user)
+                    .first()
+                )
+                if draft is None:
+                    return _refused(request, 0, "This saved draft could not be found.")
+                if draft.booked_at is not None:
+                    receipts = list(draft.receipts.order_by("draft_group_index"))
+                    if not receipts:
+                        logger.error(
+                            "Booked receipt draft %s has no linked receipts", draft.pk
+                        )
+                        return _refused(
+                            request,
+                            0,
+                            "This saved draft has no linked receipts. Contact an administrator.",
+                        )
+                    return _booked_response(request, receipts)
+            else:
+                draft = (
+                    StockReceiptDraft.objects.select_for_update()
+                    .filter(request_key=request_key)
+                    .first()
+                )
+                if draft is not None:
+                    if draft.recorded_by_id != request.user.pk:
+                        raise ValidationError(
+                            {"request_key": "This request key belongs to another account."}
+                        )
+                    if draft.payload != booking_payload:
+                        raise ValidationError(
+                            {"request_key": "This request key was already used for different data."}
+                        )
+                    if draft.booked_at is not None:
+                        receipts = list(draft.receipts.order_by("draft_group_index"))
+                        if not receipts:
+                            logger.error(
+                                "Booked receipt operation %s has no linked receipts",
+                                draft.pk,
+                            )
+                            return _refused(
+                                request,
+                                0,
+                                "This saved delivery has no linked receipts. Contact an administrator.",
+                            )
+                        return _booked_response(request, receipts)
+                    raise ValidationError(
+                        {"request_key": "This delivery booking is already in progress. Try again."}
+                    )
+
+                # Preserve replay behavior for single receipts recorded before
+                # delivery-level request keys were introduced.
+                prior_receipt = StockReceipt.objects.filter(
+                    request_key=request_key,
+                    draft__isnull=True,
+                ).first()
+                if prior_receipt is not None:
+                    if len(groups) != 1 or groups[0]["group_index"] != 0:
+                        raise ValidationError(
+                            {"request_key": "This request key was already used for different data."}
+                        )
+                    legacy_replay = True
+                else:
+                    draft = StockReceiptDraft.objects.create(
+                        recorded_by=request.user,
+                        request_key=request_key,
+                        payload=booking_payload,
+                    )
+
+            receipts = []
+            received_at = timezone.now()
+            all_product_ids = {
+                line.product_id
+                for group in groups
+                for line in group["lines"]
+            }
+            list(
+                Product.objects.select_for_update()
+                .filter(pk__in=all_product_ids)
+                .order_by("pk")
+                .values_list("pk", flat=True)
+            )
+            row_offset = 0
+            for group in groups:
+                group_index = group["group_index"]
+                group_key = (
+                    request_key
+                    if len(groups) == 1 and group_index == 0
+                    else uuid5(request_key, f"supplier-group-{group_index}")
+                )
+                try:
+                    receipts.append(
+                        receive_stock(
+                            actor=request.user,
+                            request_key=group_key,
+                            lines=group["lines"],
+                            received_at=received_at,
+                            source=StockReceiptSource.PURCHASE,
+                            purchased_on=purchased_on,
+                            supplier_name=group["supplier_name"],
+                            external_reference=group["external_reference"],
+                            draft=None if legacy_replay else draft,
+                            draft_group_index=group_index if draft is not None else None,
+                        )
+                    )
+                except (ValueError, ValidationError) as error:
+                    row, message = _describe_service_error(error)
+                    if row:
+                        row += row_offset
+                        message = re.sub(r"^Line \d+:", f"Line {row}:", message)
+                    raise _ReceiptBookingProblem(row, message) from error
+                row_offset += len(group["lines"])
+            if draft is not None:
+                draft.booked_at = received_at
+                draft.save(update_fields=["booked_at", "updated_at"])
+    except _ReceiptBookingProblem as problem:
+        return _refused(request, problem.row, problem.message)
     except (ValueError, ValidationError) as error:
         row, message = _describe_service_error(error)
         return _refused(request, row, message)
     except DatabaseError:
-        logger.exception("Multi-line receipt failed for user %s", request.user.pk)
+        logger.exception("Multi-supplier receipt failed for user %s", request.user.pk)
         return _refused(request, 0, "The receipt could not be saved. Try again.")
 
+    return _booked_response(request, receipts)
+
+
+def _booked_response(request, receipts):
+    line_count = sum(receipt.batches.count() for receipt in receipts)
+    units = sum(
+        batch.quantity_received
+        for receipt in receipts
+        for batch in receipt.batches.all()
+    )
+    receipt_codes = ", ".join(f"#{str(receipt.pk)[:8]}" for receipt in receipts)
     response = render(
         request,
         "core/products/response.html",
         {
             "type": "success",
-            "message": f"{len(lines)} line(s) booked as receipt "
-            f"#{str(receipt.pk)[:8]}: {sum(line.quantity for line in lines):,} units onto the shelf.",
+            "message": f"{line_count} line(s) booked across {len(receipts)} receipt(s) "
+            f"{receipt_codes}: {units:,} units onto the shelf.",
         },
     )
-    return trigger_client_event(response, "reload_products_table")
+    response = trigger_client_event(response, "reload_products_table")
+    return trigger_client_event(response, "reload_stock_receipts")
 
 
 def _refused(request, row, message):
@@ -568,15 +913,21 @@ def _refused(request, row, message):
         key = str(UUID(key)) if key else ""
     except (ValueError, TypeError, AttributeError):
         key = ""
+    draft_id = request.POST.get("draft_id", "")
+    try:
+        draft_id = str(UUID(draft_id)) if draft_id else ""
+    except (ValueError, TypeError, AttributeError):
+        draft_id = ""
     return render(
         request,
         "core/products/modals/receive_stock.html",
         _dialog_context(
             request,
-            lines=_posted_lines(request, error_row=row),
+            groups=_posted_groups(request, error_row=row),
             request_key=key,
             message=message,
-            posted=request.POST,
+            draft_id=draft_id,
+            purchased_on=request.POST.get("purchased_on", ""),
         ),
     )
 
@@ -586,13 +937,163 @@ def _refused(request, row, message):
 @user_passes_test(is_admin)
 def receipt_line_blank(request):
     """One empty line, swapped into the open dialog by 'Add another product'."""
+    try:
+        group_index = int(request.GET.get("group_index", "0"))
+    except ValueError:
+        group_index = 0
+    group_index = max(0, min(group_index, MAX_RECEIPT_SUPPLIER_GROUPS - 1))
     return render(
         request,
         "core/products/partials/receipt_line_row.html",
         {
-            "line": _line_context(),
+            "line": _line_context(group_index=group_index),
             "max_units": MAX_RECEIPT_LINE_UNITS,
             "presets": RECEIPT_UNIT_PRESETS,
+        },
+    )
+
+
+def _clean_draft_payload(raw_payload):
+    if not isinstance(raw_payload, dict):
+        raise ValueError("Draft data must be an object.")
+    purchased_on = raw_payload.get("purchased_on", "")
+    if not isinstance(purchased_on, str) or len(purchased_on) > 10:
+        raise ValueError("Enter a valid purchase date.")
+    if purchased_on:
+        try:
+            dt.date.fromisoformat(purchased_on)
+        except ValueError as error:
+            raise ValueError("Enter a valid purchase date.") from error
+    raw_groups = raw_payload.get("groups")
+    if (
+        not isinstance(raw_groups, list)
+        or not 1 <= len(raw_groups) <= MAX_RECEIPT_SUPPLIER_GROUPS
+    ):
+        raise ValueError(
+            f"A draft needs between 1 and {MAX_RECEIPT_SUPPLIER_GROUPS} supplier groups."
+        )
+    groups = []
+    total_lines = 0
+    for group in raw_groups:
+        if not isinstance(group, dict):
+            raise ValueError("Draft supplier data is invalid.")
+        supplier_name = group.get("supplier_name", "")
+        external_reference = group.get("external_reference", "")
+        raw_lines = group.get("lines")
+        if (
+            not isinstance(supplier_name, str)
+            or len(supplier_name) > 255
+            or not isinstance(external_reference, str)
+            or len(external_reference) > 255
+            or not isinstance(raw_lines, list)
+        ):
+            raise ValueError("Draft supplier details are invalid.")
+        lines = []
+        for line in raw_lines:
+            if not isinstance(line, dict):
+                raise ValueError("Draft line data is invalid.")
+            values = {
+                key: line.get(key, "")
+                for key in ("product_id", "units", "unit_cost", "selling_price")
+            }
+            if any(not isinstance(value, str) or len(value) > 64 for value in values.values()):
+                raise ValueError("Draft line values are invalid.")
+            lines.append(values)
+        total_lines += len(lines)
+        groups.append(
+            {
+                "supplier_name": supplier_name,
+                "external_reference": external_reference,
+                "lines": lines,
+            }
+        )
+    if total_lines > MAX_RECEIPT_DIALOG_ROWS:
+        raise ValueError(f"A draft can contain at most {MAX_RECEIPT_DIALOG_ROWS} lines.")
+    return {"purchased_on": purchased_on, "groups": groups}
+
+
+@login_required
+@require_POST
+@user_passes_test(is_admin)
+def save_receipt_draft(request):
+    raw_payload = request.POST.get("draft_payload", "")
+    if len(raw_payload) > 256_000:
+        return JsonResponse({"error": "This delivery is too large to save."}, status=413)
+    try:
+        payload = _clean_draft_payload(json.loads(raw_payload))
+    except (json.JSONDecodeError, ValueError) as error:
+        return JsonResponse({"error": str(error)}, status=400)
+
+    raw_id = request.POST.get("draft_id", "").strip()
+    try:
+        with transaction.atomic():
+            if raw_id:
+                try:
+                    draft_id = UUID(raw_id)
+                except (ValueError, TypeError):
+                    return JsonResponse({"error": "This saved draft could not be found."}, status=404)
+                draft = (
+                    StockReceiptDraft.objects.select_for_update()
+                    .filter(pk=draft_id, recorded_by=request.user)
+                    .first()
+                )
+                if draft is None:
+                    return JsonResponse({"error": "This saved draft could not be found."}, status=404)
+                if draft.booked_at is not None:
+                    return JsonResponse({"error": "This delivery has already been booked."}, status=409)
+                draft.payload = payload
+                draft.save(update_fields=["payload", "updated_at"])
+            else:
+                draft = StockReceiptDraft.objects.create(
+                    recorded_by=request.user,
+                    payload=payload,
+                )
+    except DatabaseError:
+        logger.exception("Receipt draft save failed for user %s", request.user.pk)
+        return JsonResponse({"error": "The draft could not be saved. Try again."}, status=500)
+    return JsonResponse(
+        {
+            "id": str(draft.pk),
+            "updated_at": draft.updated_at.isoformat(),
+            "updated_at_display": date_format(
+                timezone.localtime(draft.updated_at), "d M Y H:i"
+            ),
+        }
+    )
+
+
+@login_required
+@require_POST
+@user_passes_test(is_admin)
+def delete_receipt_draft(request, draft_id):
+    with transaction.atomic():
+        draft = get_object_or_404(
+            StockReceiptDraft.objects.select_for_update().filter(booked_at__isnull=True),
+            pk=draft_id,
+            recorded_by=request.user,
+        )
+        draft.delete()
+    return redirect("core:stock-receipts")
+
+
+@login_required
+@require_GET
+@user_passes_test(is_admin)
+def receipt_supplier_group_blank(request):
+    try:
+        group_index = int(request.GET.get("group_index", ""))
+    except ValueError:
+        return JsonResponse({"error": "Choose a valid supplier group."}, status=400)
+    if not 0 <= group_index < MAX_RECEIPT_SUPPLIER_GROUPS:
+        return JsonResponse({"error": "This delivery already has the maximum suppliers."}, status=400)
+    return render(
+        request,
+        "core/products/partials/receipt_supplier_group.html",
+        {
+            "group": _supplier_group_context(group_index),
+            "max_units": MAX_RECEIPT_LINE_UNITS,
+            "presets": RECEIPT_UNIT_PRESETS,
+            "is_first": False,
         },
     )
 
@@ -607,17 +1108,73 @@ def receive_stock_question(request):
     """
     if request.method == "POST":
         return _book_receipt(request)
-    lines = [_line_context()]
+    groups = [_supplier_group_context()]
+    draft_id = request.GET.get("draft_id", "").strip()
+    purchased_on = ""
+    if draft_id:
+        draft = get_object_or_404(
+            StockReceiptDraft,
+            pk=draft_id,
+            recorded_by=request.user,
+        )
+        if draft.booked_at is not None:
+            receipts = list(draft.receipts.order_by("draft_group_index"))
+            if receipts and request.headers.get("HX-Request") == "true":
+                return _booked_response(request, receipts)
+            if not receipts:
+                logger.error("Booked receipt draft %s has no linked receipts", draft.pk)
+            return redirect("core:stock-receipts")
+        raw_groups = draft.payload.get("groups", [])
+        product_ids = []
+        for group in raw_groups:
+            for line in group.get("lines", []):
+                try:
+                    product_ids.append(UUID(line.get("product_id", "")))
+                except (ValueError, TypeError):
+                    pass
+        products = {
+            product.pk: product
+            for product in Product.objects.filter(pk__in=product_ids)
+        }
+        groups = []
+        for index, raw_group in enumerate(raw_groups):
+            lines = []
+            for raw_line in raw_group.get("lines", []):
+                try:
+                    product_id = UUID(raw_line.get("product_id", ""))
+                except (ValueError, TypeError):
+                    product_id = None
+                lines.append(
+                    _line_context(
+                        product_id=str(product_id or raw_line.get("product_id", "")),
+                        product=products.get(product_id),
+                        units=raw_line.get("units", ""),
+                        unit_cost=raw_line.get("unit_cost", ""),
+                        selling_price=raw_line.get("selling_price", ""),
+                        group_index=index,
+                    )
+                )
+            groups.append(
+                _supplier_group_context(
+                    index,
+                    supplier_name=raw_group.get("supplier_name", ""),
+                    external_reference=raw_group.get("external_reference", ""),
+                    lines=lines or [_line_context(group_index=index)],
+                )
+            )
+        purchased_on = draft.payload.get("purchased_on", "")
     raw_product_id = request.GET.get("product_id")
-    if raw_product_id:
+    if raw_product_id and not draft_id:
         product = Product.objects.filter(pk=raw_product_id).first()
         if product is not None:
-            lines = [
-                _line_context(
+            groups = [
+                _supplier_group_context(
+                    lines=[_line_context(
                     product_id=str(product.pk),
                     product=product,
                     units=RECEIPT_UNIT_PRESETS[1],
                     unit_cost=product.cost,
+                    )]
                 )
             ]
         # a product that is gone leaves a blank dialog rather than a 404: the
@@ -625,5 +1182,80 @@ def receive_stock_question(request):
     return render(
         request,
         "core/products/modals/receive_stock.html",
-        _dialog_context(request, lines=lines),
+        _dialog_context(
+            request,
+            groups=groups,
+            draft_id=draft_id,
+            purchased_on=purchased_on,
+        ),
+    )
+
+
+@login_required
+@user_passes_test(is_admin)
+@require_POST
+def receive_selected_stock_question(request):
+    """Open the receipt dialog with the selected depleted products prefilled."""
+    raw_ids = request.POST.getlist("ids")
+    try:
+        product_ids = list(dict.fromkeys(UUID(raw_id) for raw_id in raw_ids))
+    except (TypeError, ValueError):
+        return _selected_restock_error(
+            request,
+            "The selection is invalid. Refresh the depleted products and try again.",
+        )
+
+    if not product_ids:
+        return _selected_restock_error(
+            request, "Select at least one depleted product to restock."
+        )
+    if len(product_ids) > MAX_RECEIPT_DIALOG_ROWS:
+        product_label = "product" if MAX_RECEIPT_DIALOG_ROWS == 1 else "products"
+        return _selected_restock_error(
+            request,
+            f"Batch restock supports up to {MAX_RECEIPT_DIALOG_ROWS} selected {product_label}. "
+            "Select fewer products and try again.",
+        )
+
+    products = {
+        product.pk: product
+        for product in Product.objects.filter(pk__in=product_ids)
+    }
+    if len(products) != len(product_ids) or any(
+        products[product_id].stock != 0
+        for product_id in product_ids
+        if product_id in products
+    ):
+        return _selected_restock_error(
+            request,
+            "Some selected products could not be found or are no longer depleted. "
+            "Refresh the list and try again.",
+        )
+
+    lines = [
+        _line_context(
+            product_id=str(product_id),
+            product=products[product_id],
+            unit_cost=products[product_id].cost,
+            group_index=0,
+        )
+        for product_id in product_ids
+    ]
+    return render(
+        request,
+        "core/products/modals/receive_stock.html",
+        _dialog_context(
+            request,
+            groups=[_supplier_group_context(lines=lines)],
+            selected_restock=True,
+            selected_count=len(lines),
+        ),
+    )
+
+
+def _selected_restock_error(request, message):
+    return render(
+        request,
+        "core/products/modals/receive_stock.html",
+        _dialog_context(request, message=message, selected_restock=True),
     )

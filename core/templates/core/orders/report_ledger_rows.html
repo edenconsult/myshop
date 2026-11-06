@@ -54,7 +54,12 @@
               {{ order.units|default:0 }}
             </td>
             <td class="tnum px-3 py-3 text-right text-slate-600 dark:text-slate-300">
-              GH₵ {{ cost|floatformat:2|intcomma }}
+              <span class="inline-flex items-center gap-1">
+                {% if order.estimated_lines %}
+                  <span title="{{ order.estimated_lines }} line{{ order.estimated_lines|pluralize }} costed from opening or legacy estimates" class="rounded bg-amber-100 px-1 py-0.5 text-[9px] font-bold uppercase tracking-wider text-amber-800 dark:bg-amber-500/10 dark:text-amber-400">Est.</span>
+                {% endif %}
+                GH₵ {{ cost|floatformat:2|intcomma }}
+              </span>
             </td>
             <td class="tnum px-3 py-3 text-right font-semibold text-slate-900 dark:text-slate-100">
               GH₵ {{ order.overall_amount_paid|floatformat:2|intcomma }}

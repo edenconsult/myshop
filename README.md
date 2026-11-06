@@ -125,6 +125,13 @@ and it needs both of those options: the id of an ADMIN account that already exis
 once-only reference number so a retry cannot double-book stock. The website does all of that
 for you, so use the website unless you have a reason not to.
 
+To completely reset the catalogue and its history, first preview the affected record
+counts with `.venv\Scripts\python.exe manage.py purge_catalogue`. This removes products,
+stock batches and adjustments, receipts and drafts, sale allocations, orders and order
+items, and catalogue-import operation records. To perform the purge, back up the database,
+stop the shop and background workers, then run
+`.venv\Scripts\python.exe manage.py purge_catalogue --execute`. This cannot be undone.
+
 ## 7. Make your own login
 
 The first account is created from the command line; after that you add cashiers inside the

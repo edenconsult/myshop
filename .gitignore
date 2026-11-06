@@ -28,3 +28,6 @@ media/
 # Local docs & test files
 noble_cosmetics.ods
 *.pdf
+
+# Credential notes pasted beside plan files; keep them out of git
+docs/superpowers/plans/*.txt

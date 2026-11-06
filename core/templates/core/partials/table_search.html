@@ -114,15 +114,28 @@
           <span class="tnum font-semibold text-slate-900 dark:text-slate-100" x-text="ids.length">0</span>
           selected
         </p>
-        <button type="button"
-                hx-post="{% url 'core:remove-products-question' %}"
-                hx-vals="js:{ids: getProductIDs()}"
-                hx-target="#modal_root"
-                hx-swap="innerHTML"
-                class="inline-flex items-center gap-1.5 rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-rose-700 dark:bg-rose-500 dark:text-slate-950 dark:hover:bg-rose-400">
-          {% icon 'delete' 'text-[16px]' %}
-          <span>Remove selected</span>
-        </button>
+        <div class="flex flex-wrap items-center gap-2">
+          {% if status == 'out_of_stock' %}
+            <button type="button"
+                    hx-post="{% url 'core:receive-selected-stock-question' %}"
+                    hx-vals="js:{ids: getProductIDs()}"
+                    hx-target="#modal_root"
+                    hx-swap="innerHTML"
+                    class="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-white px-3 py-1.5 text-xs font-semibold text-emerald-800 transition-colors hover:bg-emerald-50 dark:border-emerald-900 dark:bg-slate-900 dark:text-emerald-300 dark:hover:bg-emerald-950/60">
+              {% icon 'inventory_2' 'text-[16px]' %}
+              <span>Restock selected</span>
+            </button>
+          {% endif %}
+          <button type="button"
+                  hx-post="{% url 'core:remove-products-question' %}"
+                  hx-vals="js:{ids: getProductIDs()}"
+                  hx-target="#modal_root"
+                  hx-swap="innerHTML"
+                  class="inline-flex items-center gap-1.5 rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-rose-700 dark:bg-rose-500 dark:text-slate-950 dark:hover:bg-rose-400">
+            {% icon 'delete' 'text-[16px]' %}
+            <span>Remove selected</span>
+          </button>
+        </div>
       </div>
 
       <div class="overflow-x-auto">

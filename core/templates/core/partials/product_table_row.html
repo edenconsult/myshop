@@ -50,40 +50,26 @@
   </td>
   <td class="px-4 py-2 align-middle">
     <div class="flex items-center gap-2">
-      <div class="flex items-center rounded-lg bg-slate-100 p-0.5 dark:bg-slate-800">
-        <button title="Decrease stock count"
-                type="button"
-                class="flex h-6 w-6 items-center justify-center rounded text-slate-500 transition-colors hover:bg-white hover:text-slate-900 dark:hover:bg-slate-950 dark:hover:text-slate-100"
-                hx-post="{% url 'core:update-product-stock' product.id %}"
-                hx-target="closest tr"
-                hx-swap="outerHTML"
-                hx-vals="js:{stock: Math.max(0, parseInt(this.closest('td').querySelector('[name=stock]').value, 10) - 1)}">
-          <span class="sr-only">Decrease stock</span>
-          {% icon 'remove' 'text-[16px]' %}
-        </button>
-        <input id="product_{{ product.id }}_stock"
-               type="number"
-               name="stock"
-               min="0"
-               required
-               value="{{ product.stock }}"
-               hx-post="{% url 'core:update-product-stock' product.id %}"
-               hx-target="closest tr"
-               hx-swap="outerHTML"
-               hx-trigger="change"
-               hx-vals="js:{stock: this.value}"
-               class="tnum w-12 border-0 bg-transparent px-1 py-1 text-center text-sm font-semibold text-slate-900 focus:ring-0 dark:text-slate-100">
-        <button title="Increase stock count"
-                type="button"
-                class="flex h-6 w-6 items-center justify-center rounded text-slate-500 transition-colors hover:bg-white hover:text-slate-900 dark:hover:bg-slate-950 dark:hover:text-slate-100"
-                hx-post="{% url 'core:update-product-stock' product.id %}"
-                hx-target="closest tr"
-                hx-swap="outerHTML"
-                hx-vals="js:{stock: parseInt(this.closest('td').querySelector('[name=stock]').value, 10) + 1}">
-          <span class="sr-only">Increase stock</span>
-          {% icon 'add' 'text-[16px]' %}
-        </button>
-      </div>
+      <button type="button"
+              title="Adjust counted stock against a batch"
+              hx-get="{% url 'core:adjust-stock-question' product.id %}"
+              hx-target="#modal_root"
+              hx-swap="innerHTML"
+              class="tnum rounded-lg bg-slate-100 px-2.5 py-1 text-sm font-semibold text-slate-900 transition-colors hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700">
+        {{ product.stock|intcomma }}
+      </button>
+      {% if error %}
+        {# data-stock-error is the hook the Adjust Stock Count dialog reads to learn #}
+        {# that a 2xx row swap still carried a failed save; title keeps the full #}
+        {# backend sentence reachable under the truncated pill. #}
+        <div role="alert"
+             data-stock-error
+             title="{{ error }}"
+             x-data="" x-init="setTimeout(() => $el.remove(), 6000)"
+             class="flex max-w-xs items-center gap-1.5 truncate rounded-full bg-amber-100 px-2.5 py-0.5 text-[11px] font-semibold text-amber-800 dark:bg-amber-950/60 dark:text-amber-400">
+          {% icon 'warning' 'text-[14px]' %} {{ error }}
+        </div>
+      {% endif %}
       {% if product.stock == 0 %}
         <span class="whitespace-nowrap rounded-full bg-rose-100 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-rose-700 dark:bg-rose-950/60 dark:text-rose-400">
           Out of stock
@@ -100,10 +86,10 @@
     </div>
   </td>
   <td class="tnum px-4 py-2 text-right align-middle text-sm text-slate-500 dark:text-slate-400">
-    GH₵ {{ product.cost }}
+    GH₵ {{ product.cost|floatformat:2|intcomma }}
   </td>
   <td class="tnum px-4 py-2 text-right align-middle text-sm font-semibold text-slate-900 dark:text-slate-100">
-    GH₵ {{ product.price }}
+    GH₵ {{ product.price|floatformat:2|intcomma }}
   </td>
   <td class="tnum px-4 py-2 text-right align-middle text-sm font-semibold {% if product.margin < 0 %}text-rose-600 dark:text-rose-400{% else %}text-emerald-700 dark:text-emerald-400{% endif %}">
     {% if product.margin > 0 %}+{% endif %}{{ product.margin|floatformat:1 }}%
@@ -112,7 +98,7 @@
     <div class="flex items-center justify-center gap-1">
       <button title="Restock this product"
               type="button"
-              hx-get="{% url 'core:restock-product' product.id %}"
+              hx-get="{% url 'core:receive-stock-question' %}?product_id={{ product.id }}"
               hx-target="#modal_root"
               hx-swap="innerHTML"
               class="flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-emerald-50 hover:text-emerald-700 dark:text-slate-400 dark:hover:bg-emerald-950/60 dark:hover:text-emerald-400">
@@ -136,6 +122,15 @@
               class="flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-rose-50 hover:text-rose-700 dark:text-slate-400 dark:hover:bg-rose-950/60 dark:hover:text-rose-400">
         {% icon 'delete' 'text-[18px]' %}
         <span class="sr-only">Remove {{ product.name }}</span>
+      </button>
+      <button title="Batch history"
+              type="button"
+              hx-get="{% url 'core:product-batches' product.id %}"
+              hx-target="#modal_root"
+              hx-swap="innerHTML"
+              class="flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-100">
+        {% icon 'sell' 'text-[18px]' %}
+        <span class="sr-only">Batch history for {{ product.name }}</span>
       </button>
     </div>
   </td>

@@ -48,6 +48,20 @@
           <span>Import CSV</span>
         </button>
         <button type="button"
+                hx-get="{% url 'core:receive-stock-question' %}"
+                hx-target="#modal_root"
+                hx-swap="innerHTML"
+                class="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-sm transition-colors hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800">
+          {% icon 'inventory_2' 'text-[18px] text-slate-500 dark:text-slate-400' %}
+          <span>Receive Delivery</span>
+        </button>
+        {# Plain link, not a dialog: the register is a full page of its own. #}
+        <a href="{% url 'core:stock-receipts' %}"
+           class="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-sm transition-colors hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800">
+          {% icon 'receipt_long' 'text-[18px]' %}
+          <span>Purchase Receipts</span>
+        </a>
+        <button type="button"
                 hx-get="{% url 'core:add-product' %}"
                 hx-target="#modal_root"
                 hx-swap="innerHTML"
@@ -82,6 +96,12 @@
            hx-swap="innerHTML"></div>
     {% elif initial_view == 'import' %}
       <div hx-get="{% url 'core:import-products' %}"
+           hx-trigger="load"
+           hx-target="#modal_root"
+           hx-swap="innerHTML"></div>
+    {% endif %}
+    {% if initial_draft_id %}
+      <div hx-get="{% url 'core:receive-stock-question' %}?draft_id={{ initial_draft_id }}"
            hx-trigger="load"
            hx-target="#modal_root"
            hx-swap="innerHTML"></div>
@@ -133,67 +153,6 @@
       document.addEventListener("keydown", window.__stockLedgerSearchShortcut);
     })();
 
-    (() => {
-      if (window.__ledgerModals) return;
-      window.__ledgerModals = true;
-
-      const root = document.getElementById("modal_root");
-      if (!root) return;
-
-      let opener = null;
-      const overlay = () => root.firstElementChild;
-
-      const close = () => {
-        if (!overlay()) return;
-        root.innerHTML = "";
-        document.body.classList.remove("overflow-hidden");
-        opener?.focus();
-        opener = null;
-      };
-
-      const focusable = () =>
-        [...overlay().querySelectorAll(
-          'a[href], button:not([disabled]), input:not([type="hidden"]), select, textarea, [tabindex]:not([tabindex="-1"])',
-        )].filter((el) => el.type !== "hidden" && el.getClientRects().length > 0);
-
-      document.addEventListener("keydown", (event) => {
-        if (!overlay()) return;
-
-        if (event.key === "Escape") {
-          event.preventDefault();
-          close();
-          return;
-        }
-
-        if (event.key !== "Tab") return;
-        const items = focusable();
-        if (items.length === 0) return;
-
-        const first = items[0];
-        const last = items[items.length - 1];
-        if (event.shiftKey && document.activeElement === first) {
-          event.preventDefault();
-          last.focus();
-        } else if (!event.shiftKey && document.activeElement === last) {
-          event.preventDefault();
-          first.focus();
-        }
-      });
-
-      // a click that lands on the backdrop itself, not the dialog
-      root.addEventListener("mousedown", (event) => {
-        if (event.target === overlay()) close();
-      });
-
-      root.addEventListener("click", (event) => {
-        if (event.target.closest("[data-modal-close]")) close();
-      });
-
-      root.addEventListener("htmx:afterSwap", () => {
-        document.body.classList.add("overflow-hidden");
-        if (!opener) opener = document.activeElement;
-        overlay()?.querySelector("[data-autofocus]")?.focus();
-      });
-    })();
+    {% include "core/partials/modal_controller.html" %}
   </script>
 {% endblock scripts %}

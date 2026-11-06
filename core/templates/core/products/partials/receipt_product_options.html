@@ -1,0 +1,36 @@
+{% load humanize %}
+{% comment %}
+  One line per candidate product, as a button the dialog's pickReceiptProduct()
+  reads. Everything the row needs comes from data-product-* and out of
+  $el.dataset: a catalogue name is the one string that can break a JS literal,
+  so it is never interpolated into @click, hx-* or x-*.
+  This fragment carries no Alpine scope of its own: htmx swaps it inside the
+  dialog form, which owns the x-data that defines pickReceiptProduct().
+{% endcomment %}
+{% for product in products %}
+  <button type="button"
+          class="receipt-picker-option flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-sm text-slate-700 transition-colors hover:bg-emerald-50 dark:text-slate-200 dark:hover:bg-emerald-950/40"
+          data-product-id="{{ product.pk }}"
+          data-product-name="{{ product.name }}"
+          data-product-sku="{{ product.sku|default:'No code' }}"
+          data-product-cost="{{ product.cost }}"
+          data-product-price="{{ product.price }}"
+          data-product-stock="{{ product.stock }}"
+          @click="pickReceiptProduct($el)">
+    <span class="min-w-0">
+      <span class="block truncate font-medium">{{ product.name }}</span>
+      <span class="tnum block text-[11px] uppercase tracking-wider text-slate-500 dark:text-slate-400">
+        {{ product.sku|default:"No code" }} · {{ product.stock|intcomma }} on shelf
+      </span>
+    </span>
+    <span class="tnum shrink-0 text-xs font-semibold">GH₵ {{ product.price|floatformat:2|intcomma }}</span>
+  </button>
+{% empty %}
+  <p class="px-3 py-4 text-center text-xs text-slate-500 dark:text-slate-400">
+    {% if term %}
+      Nothing in the catalogue matches {{ term }}.
+    {% else %}
+      The catalogue has no products to add yet.
+    {% endif %}
+  </p>
+{% endfor %}

@@ -5,21 +5,20 @@
     <!-- Styles are attached from disk by utils.render_attached_pdf; never fetched by URL here. -->
   </head>
   <body>
-    <div class="mx-24">
-      <div>
-        <div class="flex flex-col space-y-4 text-center border-b-2 border-gray-200">
+    <main class="orders-print">
+        <header class="orders-print-heading">
           {% include "core/orders/prints/noble_cosmetics_header.html" %}
-          <h3 class="font-semibold">
-            Orders by <span class="underline">
+          <h2 class="orders-print-title">
+            Orders by
             {% if users == 'all' %}
               All Users
             {% else %}
               {{ users }}
             {% endif %}
-          </span> for {{ date|date:"jS F, Y" }}
-        </h3>
-      </div>
-      <div class="mt-12">
+            for {{ date|date:"jS F, Y" }}
+          </h2>
+        </header>
+      <section class="orders-print-table">
         <table class="w-full text-xs border-2 border-gray-500">
           <thead class="text-white bg-gray-600" style="background:#666;color:#fff">
             <tr>
@@ -37,7 +36,7 @@
                      hx-target="#order_details"
                      hx-get="{% url 'core:view-order' order.id forloop.counter %}">{{ order.code }}</a>
                 </td>
-                <td class="px-3 py-2 text-center border border-gray-100 ">GHs {{ order.overall_amount_paid }}</td>
+                <td class="px-3 py-2 text-center border border-gray-100">GH₵ {{ order.overall_amount_paid|floatformat:2 }}</td>
                 <td class="px-3 py-2 text-center border border-gray-100 ">{{ order.created }}</td>
               </tr>
             {% endfor %}
@@ -55,9 +54,7 @@
             </tr>
           </tbody>
         </table>
-      </div>
-    </div>
-  </div>
-</div>
+      </section>
+    </main>
 </body>
 </html>

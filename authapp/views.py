@@ -5,11 +5,16 @@ from django.http import HttpResponse, HttpResponseForbidden
 from django.urls import reverse
 from django.utils.http import urlencode
 from django.views.decorators.http import require_POST
-from authapp.forms import AccountSetPasswordForm, NewAccountForm, ProfileForm
+from authapp.forms import (
+    AccountSetPasswordForm,
+    NewAccountForm,
+    ProfileForm,
+    profile_form_for,
+)
 from utils import can_ring_up, is_admin
 
 
-def _accounts_context(request):
+def _accounts_context(request, bound_form=None):
     model = get_user_model()
     context = {
         "accounts": model.objects.order_by("-date_joined"),
@@ -17,7 +22,25 @@ def _accounts_context(request):
         "reset_form": AccountSetPasswordForm(),
         "flash_created": request.GET.get("created"),
         "flash_reset": request.GET.get("reset"),
+        "flash_updated": request.GET.get("updated"),
     }
+    # one form per editable row, so Django's own field errors sit inline in that
+    # row's dialog instead of being copied around by script. The owner's own row
+    # is left out: their details belong to auth:profile.
+    edit_forms = []
+    for account in context["accounts"]:
+        if account.pk == request.user.pk:
+            continue
+        if bound_form is not None and bound_form.instance.pk == account.pk:
+            edit_forms.append((account.pk, bound_form))
+        else:
+            edit_forms.append((account.pk, profile_form_for(account)))
+    context["edit_forms"] = edit_forms
+    if bound_form is not None:
+        # the rejected save re-renders the roster, so the row whose dialog was
+        # open must reopen carrying what was typed
+        context["edit_open"] = bound_form.instance.username
+        context["edit_open_pk"] = bound_form.instance.pk
     # after a rejected reset the dialog reopens on the same row, so its POST
     # target must survive the re-render
     reset_open = request.GET.get("reset_open")
@@ -49,6 +72,27 @@ def account_create(request):
         return render(request, "authapp/accounts.html", context)
     account = form.save()
     return redirect(f"{reverse('auth:accounts')}?{urlencode({'created': account.username})}")
+
+
+@require_POST
+@login_required
+@user_passes_test(is_admin)
+def account_update_details(request, account_id):
+    account = get_object_or_404(get_user_model(), id=account_id)
+    # the owner's own details stay under auth:profile, where they are edited by
+    # the person they belong to
+    if account.pk == request.user.pk:
+        return HttpResponseForbidden("Use Your profile for your own account.")
+
+    form = profile_form_for(account, request.POST)
+    if not form.is_valid():
+        return render(
+            request,
+            "authapp/accounts.html",
+            _accounts_context(request, bound_form=form),
+        )
+    form.save()
+    return redirect(f"{reverse('auth:accounts')}?{urlencode({'updated': account.username})}")
 
 
 @require_POST

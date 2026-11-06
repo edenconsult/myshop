@@ -1,0 +1,413 @@
+{% extends "partials/modal.html" %}
+{% load humanize %}
+{% load icons %}
+{% block modal_width %}max-w-4xl{% endblock modal_width %}
+{% block modal_icon %}{% icon 'inventory_2' 'text-[24px]' %}{% endblock modal_icon %}
+{% block modal_title %}{% if selected_restock %}Batch Restock{% if selected_count %} · {{ selected_count }} Selected Product{{ selected_count|pluralize }}{% endif %}{% else %}Receive Delivery{% endif %}{% endblock modal_title %}
+{% block modal_subtitle %}{% if selected_restock %}Review quantities and costs for the selected depleted products before booking the receipt.{% else %}Book one delivery, as many products as it carried.{% endif %}{% endblock modal_subtitle %}
+{% block dialog_attrs %}
+  x-data="{
+    maxRows: {{ max_rows }},
+    maxUnits: {{ max_units }},
+    maxGroups: {{ max_groups }},
+    priceCap: {{ price_cap }},
+    rowCount: {{ line_count }},
+    emptyRows: 0,
+    draftId: '{{ draft_id }}',
+    draftState: '',
+    draftError: '',
+    draftTimer: null,
+    savingDraft: false,
+    saveAgain: false,
+    addingGroup: false,
+    draftUrl: '{% url "core:save-receipt-draft" %}',
+    nextGroupIndex: {{ groups|length }},
+    root: null,
+    requestKey: '{{ request_key }}' || (function () {
+      var api = window.crypto;
+      if (api &amp;&amp; typeof api.randomUUID === 'function') {
+        try {
+          return api.randomUUID();
+        } catch (err) {
+          /* plain http over the LAN: crypto.randomUUID is unavailable, so the key is built below */
+        }
+      }
+      var digits = [];
+      for (var i = 0; i &lt; 32; i++) {
+        digits.push(Math.floor(Math.random() * 16).toString(16));
+      }
+      digits[12] = '4';
+      digits[16] = ['8', '9', 'a', 'b'][Math.floor(Math.random() * 4)];
+      return digits.slice(0, 8).join('') + '-' + digits.slice(8, 12).join('') + '-' + digits.slice(12, 16).join('') + '-' + digits.slice(16, 20).join('') + '-' + digits.slice(20, 32).join('');
+    })(),
+    num(value) {
+      const parsed = parseFloat(value);
+      return isNaN(parsed) ? 0 : parsed;
+    },
+    money(value) {
+      return this.num(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    },
+    rowEls() {
+      return Array.from(this.root.querySelectorAll('.receipt-row'));
+    },
+    set(selector, text) {
+      this.root.querySelector(selector).textContent = text;
+    },
+    /* $el is the element whose directive is running, so a handler on a row
+       input would search that input for the summary spans. x-init is the one
+       call made from the element carrying this scope. */
+    mount(el) {
+      this.root = el;
+      this.nextGroupIndex = Math.max(
+        this.nextGroupIndex,
+        ...Array.from(el.querySelectorAll('.receipt-supplier-group'), (group) =>
+          Number(group.dataset.groupIndex) + 1
+        )
+      );
+      this.syncReceipt();
+    },
+    setReceiptUnits($el) {
+      const row = $el.closest('.receipt-row');
+      row.querySelector('.receipt-row-units').value = $el.dataset.preset;
+      this.syncReceipt();
+      this.scheduleDraftSave();
+    },
+    pickReceiptProduct($el) {
+      const row = $el.closest('.receipt-row');
+      row.querySelector('.receipt-row-product-id').value = $el.dataset.productId;
+      const label = row.querySelector('.receipt-row-chosen');
+      label.classList.remove('hidden');
+      row.querySelector('.receipt-row-chosen-name').textContent = $el.dataset.productName;
+      row.querySelector('.receipt-row-chosen-sku').textContent = $el.dataset.productSku;
+      row.querySelector('.receipt-row-current-price').value = $el.dataset.productPrice;
+      const cost = row.querySelector('.receipt-row-cost');
+      if (cost.value === '') {
+        cost.value = $el.dataset.productCost;
+      }
+      const previousCost = row.querySelector('.receipt-row-previous-cost');
+      previousCost.querySelector('.tnum').textContent = this.money($el.dataset.productCost);
+      previousCost.hidden = false;
+      row.querySelector('.receipt-row-search').value = '';
+      row.querySelector('.receipt-row-search').classList.add('hidden');
+      row.querySelector('.receipt-row-picker').innerHTML = '';
+      row.querySelector('.receipt-row-units').focus();
+      this.syncReceipt();
+      this.scheduleDraftSave();
+    },
+    changeReceiptProduct($el) {
+      const row = $el.closest('.receipt-row');
+      row.querySelector('.receipt-row-product-id').value = '';
+      row.querySelector('.receipt-row-chosen').classList.add('hidden');
+      row.querySelector('.receipt-row-search').classList.remove('hidden');
+      row.querySelector('.receipt-row-cost').value = '';
+      row.querySelector('.receipt-row-price').value = '';
+      row.querySelector('.receipt-row-current-price').value = '';
+      row.querySelector('.receipt-row-previous-cost').hidden = true;
+      row.querySelector('.receipt-row-search').focus();
+      this.syncReceipt();
+      this.scheduleDraftSave();
+    },
+    removeReceiptLine($el) {
+      if (this.rowEls().length > 1) {
+        $el.closest('.receipt-row').remove();
+      }
+      this.syncReceipt();
+      this.scheduleDraftSave();
+    },
+    async addSupplierGroup($el) {
+      if (this.addingGroup) {
+        return;
+      }
+      this.addingGroup = true;
+      const groupIndex = this.nextGroupIndex++;
+      try {
+        const response = await fetch($el.dataset.groupUrl + '?group_index=' + groupIndex, {
+          credentials: 'same-origin',
+        });
+        if (!response.ok) {
+          this.nextGroupIndex = groupIndex;
+          this.draftError = 'Could not add a supplier group. Please try again.';
+          return;
+        }
+        const container = this.root.querySelector('#receipt_supplier_groups');
+        container.insertAdjacentHTML('beforeend', await response.text());
+        if (window.htmx) {
+          window.htmx.process(container.lastElementChild);
+        }
+        container.lastElementChild.querySelector('.receipt-supplier-name').focus();
+        this.syncReceipt();
+        this.scheduleDraftSave();
+      } catch (error) {
+        this.nextGroupIndex = groupIndex;
+        this.draftError = 'Could not add a supplier group. Check your connection and try again.';
+      } finally {
+        this.addingGroup = false;
+      }
+    },
+    focusLastReceiptSearch($el) {
+      const rows = $el.closest('.receipt-supplier-group').querySelectorAll('.receipt-row-search');
+      rows[rows.length - 1].focus();
+      this.syncReceipt();
+      this.scheduleDraftSave();
+    },
+    removeSupplierGroup($el) {
+      const groups = Array.from(this.root.querySelectorAll('.receipt-supplier-group'));
+      if (groups.length <= 1) {
+        return;
+      }
+      $el.closest('.receipt-supplier-group').remove();
+      Array.from(this.root.querySelectorAll('.receipt-supplier-group')).forEach((group, index) => {
+        group.dataset.groupIndex = String(index);
+        group.querySelector('.receipt-supplier-group-index').value = String(index);
+        group.querySelector('.receipt-lines').id = 'receipt_lines_' + index;
+        group.querySelectorAll('.receipt-row-group-index').forEach((input) => {
+          input.value = String(index);
+        });
+        const addLine = group.querySelector('[hx-get]');
+        addLine.setAttribute('hx-get', addLine.getAttribute('hx-get').replace(/group_index=[0-9]+/, 'group_index=' + index));
+        addLine.setAttribute('hx-target', '#receipt_lines_' + index);
+        if (window.htmx) {
+          window.htmx.process(addLine);
+        }
+      });
+      this.nextGroupIndex = groups.length - 1;
+      this.syncReceipt();
+      this.scheduleDraftSave();
+    },
+    scheduleDraftSave() {
+      clearTimeout(this.draftTimer);
+      this.draftState = 'Unsaved changes';
+      this.draftError = '';
+      this.draftTimer = setTimeout(() => this.saveDraft(), 700);
+    },
+    draftPayload() {
+      return {
+        purchased_on: this.root.querySelector('.receipt-purchased-on').value,
+        groups: Array.from(this.root.querySelectorAll('.receipt-supplier-group'), (group) => ({
+          supplier_name: group.querySelector('.receipt-supplier-name').value,
+          external_reference: group.querySelector('.receipt-external-reference').value,
+          lines: Array.from(group.querySelectorAll('.receipt-row'), (row) => ({
+            product_id: row.querySelector('.receipt-row-product-id').value,
+            units: row.querySelector('.receipt-row-units').value,
+            unit_cost: row.querySelector('.receipt-row-cost').value,
+            selling_price: row.querySelector('.receipt-row-price').value,
+          })),
+        })),
+      };
+    },
+    async saveDraft() {
+      if (this.savingDraft) {
+        this.saveAgain = true;
+        return;
+      }
+      this.savingDraft = true;
+      this.saveAgain = false;
+      this.draftState = 'Saving draft…';
+      try {
+        const csrf = this.root.querySelector('[name=csrfmiddlewaretoken]').value;
+        const response = await fetch(this.draftUrl, {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-CSRFToken': csrf },
+          body: new URLSearchParams({
+            draft_id: this.draftId,
+            draft_payload: JSON.stringify(this.draftPayload()),
+          }),
+        });
+        const result = await response.json();
+        if (!response.ok) {
+          throw new Error(result.error || 'The draft could not be saved.');
+        }
+        this.draftId = result.id;
+        this.root.querySelector('.receipt-draft-id').value = result.id;
+        const savedRow = Array.from(
+          this.root.ownerDocument.querySelectorAll('[data-receipt-draft-id]')
+        ).find((row) => row.dataset.receiptDraftId === result.id);
+        const savedAt = savedRow &amp;&amp; savedRow.querySelector('.receipt-draft-updated-at');
+        if (savedAt &amp;&amp; result.updated_at_display) {
+          savedAt.textContent = result.updated_at_display;
+        }
+        this.draftState = 'Draft saved';
+      } catch (error) {
+        this.draftError = error.message || 'The draft could not be saved.';
+        this.draftState = '';
+      } finally {
+        this.savingDraft = false;
+        if (this.saveAgain) {
+          this.saveAgain = false;
+          this.saveDraft();
+        }
+      }
+    },
+    syncReceipt() {
+      const rows = this.rowEls();
+      const seenProducts = new Set();
+      let units = 0;
+      let cost = 0;
+      let retail = 0;
+      let priced = 0;
+      let empty = 0;
+      rows.forEach((row) => {
+        const parsed = parseInt(row.querySelector('.receipt-row-units').value, 10);
+        const qty = isNaN(parsed) || parsed &lt; 1 ? 0 : parsed;
+        const lineCost = this.num(row.querySelector('.receipt-row-cost').value);
+        const priceInput = row.querySelector('.receipt-row-price');
+        const changed = priceInput.value !== '';
+        const each = changed
+          ? this.num(priceInput.value)
+          : this.num(row.querySelector('.receipt-row-current-price').value);
+        row.querySelector('.receipt-row-below-cost').classList.toggle(
+          'hidden',
+          !(changed &amp;&amp; each &lt; lineCost)
+        );
+        row.querySelector('.receipt-row-over-cap').classList.toggle(
+          'hidden',
+          !(changed &amp;&amp; each > this.priceCap)
+        );
+        const productId = row.querySelector('.receipt-row-product-id').value;
+        if (!productId) {
+          empty += 1;
+          row.querySelector('.receipt-row-duplicate').classList.add('hidden');
+        } else {
+          const groupIndex = row.querySelector('.receipt-row-group-index').value;
+          const duplicateKey = groupIndex + ':' + productId;
+          row.querySelector('.receipt-row-duplicate').classList.toggle(
+            'hidden',
+            !seenProducts.has(duplicateKey)
+          );
+          seenProducts.add(duplicateKey);
+        }
+        units += qty;
+        cost += qty * lineCost;
+        retail += qty * each;
+        priced += changed ? 1 : 0;
+      });
+      this.rowCount = rows.length;
+      this.emptyRows = empty;
+      this.set('.receipt-summary-units', units.toLocaleString('en-US'));
+      this.set('.receipt-summary-cost', this.money(cost));
+      this.set('.receipt-summary-retail', this.money(retail));
+      const margin = retail &lt;= 0 ? '0.0' : (((retail - cost) / retail) * 100).toFixed(1);
+      this.set('.receipt-summary-margin', (retail &gt; 0 &amp;&amp; retail - cost >= 0 ? '+' : '') + margin + '%');
+      this.set('.receipt-summary-lines', String(rows.length));
+      this.set('.receipt-summary-priced', String(priced));
+    },
+  }"
+  x-init="mount($el)"
+{% endblock dialog_attrs %}
+{% block modal_body %}
+  <form id="receive-form"
+        class="flex flex-col gap-4"
+        hx-post="{% url 'core:receive-stock-question' %}"
+        hx-target="#modal_root"
+        hx-swap="innerHTML">
+    {% if message %}
+      <p role="alert"
+         class="rounded-lg bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 dark:bg-rose-950/60 dark:text-rose-300">
+        Nothing was saved. {{ message }}
+      </p>
+    {% endif %}
+    <input type="hidden" name="request_key" :value="requestKey">
+    {% csrf_token %}
+    <input type="hidden" name="draft_id" class="receipt-draft-id" :value="draftId">
+    <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+      <label class="flex flex-col gap-1">
+        <span class="text-xs font-semibold uppercase tracking-wide text-slate-700 dark:text-slate-200">Purchased on</span>
+        <input name="purchased_on"
+               class="receipt-purchased-on tnum w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 focus:border-emerald-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/30 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+               type="date"
+               value="{{ purchased_on }}"
+               @input="scheduleDraftSave()"
+               >
+      </label>
+    </div>
+
+    <div class="flex flex-col gap-2">
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <span class="text-xs font-semibold uppercase tracking-wider text-slate-700 dark:text-slate-200">Supplier deliveries</span>
+        <button type="button"
+                data-group-url="{% url 'core:receipt-supplier-group-blank' %}"
+                @click="addSupplierGroup($el)"
+                :disabled="addingGroup || nextGroupIndex >= maxGroups || rowCount >= maxRows"
+                class="inline-flex min-h-[32px] items-center gap-1.5 rounded-lg border border-emerald-200 px-3 py-1.5 text-xs font-semibold transition-colors dark:border-emerald-900">
+          {% icon 'add' 'text-[16px]' %}
+          <span>Add another supplier</span>
+        </button>
+      </div>
+      <div id="receipt_supplier_groups" class="flex flex-col gap-3">
+        {% for group in groups %}
+          {% include "core/products/partials/receipt_supplier_group.html" with group=group presets=presets max_units=max_units is_first=forloop.first %}
+        {% endfor %}
+      </div>
+      <p class="text-[11px] text-slate-500 dark:text-slate-400">
+        A blank selling price leaves that product's price where it is.
+        <span x-show="emptyRows > 0" class="font-semibold text-rose-600 dark:text-rose-400">Every line needs a product.</span>
+        <span class="receipt-summary-lines-note text-amber-700 dark:text-amber-400" x-show="rowCount >= maxRows">
+          This delivery stops at <span class="tnum">{{ max_rows }}</span> lines; save or book the rest separately.
+        </span>
+      </p>
+    </div>
+    <div class="flex flex-wrap items-center gap-2 text-xs">
+      <span x-text="draftState" class="text-slate-500 dark:text-slate-400"></span>
+      <span x-text="draftError" role="status" class="font-semibold text-rose-600 dark:text-rose-400"></span>
+    </div>
+
+    <div class="flex flex-col gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/40">
+      <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-2 dark:border-slate-800">
+        <span class="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-slate-700 dark:text-slate-200">
+          {% icon 'insights' 'text-[18px] text-emerald-700 dark:text-emerald-400' %}
+          Calculation &amp; Ledger Impact
+        </span>
+        <span class="rounded-full px-2 py-0.5 text-[11px] font-semibold text-slate-600 dark:text-slate-300">
+          <span class="receipt-summary-lines tnum">0</span> line(s) across this delivery
+        </span>
+      </div>
+      <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div class="flex flex-col">
+          <span class="text-[11px] font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Units in</span>
+          <span class="receipt-summary-units tnum mt-0.5 text-base font-semibold text-slate-900 dark:text-slate-100">0</span>
+        </div>
+        <div class="flex flex-col">
+          <span class="text-[11px] font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Delivery cost</span>
+          <span class="mt-0.5 text-base font-semibold text-slate-900 dark:text-slate-100">
+            GH₵ <span class="receipt-summary-cost tnum">0.00</span>
+          </span>
+        </div>
+        <div class="flex flex-col">
+          <span class="text-[11px] font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Retail at these prices</span>
+          <span class="mt-0.5 text-base font-semibold text-slate-900 dark:text-slate-100">
+            GH₵ <span class="receipt-summary-retail tnum">0.00</span>
+          </span>
+        </div>
+        <div class="flex flex-col">
+          <span class="text-[11px] font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Gross margin</span>
+          <span class="receipt-summary-margin tnum mt-0.5 text-base font-semibold text-emerald-700 dark:text-emerald-400">+0.0%</span>
+        </div>
+      </div>
+      <p class="text-[11px] text-slate-500 dark:text-slate-400">
+        <span class="receipt-summary-priced tnum font-semibold">0</span> line(s) will change a store-wide selling price.
+      </p>
+    </div>
+  </form>
+{% endblock modal_body %}
+{% block modal_footer %}
+  <button type="button"
+          @click="saveDraft()"
+          class="rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-100">
+    Save draft
+  </button>
+  <button type="button"
+          data-modal-close
+          class="rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-100">
+    Cancel
+  </button>
+  <button type="submit"
+          form="receive-form"
+          :disabled="emptyRows > 0 || rowCount === 0 || savingDraft"
+          :disabled="emptyRows > 0 || rowCount === 0"
+          :class="emptyRows > 0 || rowCount === 0 ? 'cursor-not-allowed bg-slate-400 text-white dark:bg-slate-700 dark:text-slate-400' : 'bg-emerald-600 hover:bg-emerald-700 dark:bg-emerald-500 dark:text-slate-950 dark:hover:bg-emerald-400'"
+          class="inline-flex items-center justify-center gap-1.5 rounded-lg px-4 py-2 text-xs font-semibold text-white transition-colors">
+    {% icon 'check_circle' 'text-[18px]' %}
+    <span x-text="'Book ' + rowCount + (rowCount === 1 ? ' line' : ' lines')">Book 1 line</span>
+  </button>
+{% endblock modal_footer %}

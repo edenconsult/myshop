@@ -1,0 +1,121 @@
+{% extends "core/_core_base.html" %}
+{% load icons %}
+{% block title %}
+  Help &amp; Support |
+{% endblock title %}
+{% block main_class %}
+  mx-auto flex w-full max-w-[1700px] flex-col gap-5 px-3 pb-10 pt-20 sm:px-5 lg:px-8
+{% endblock main_class %}
+{% block content %}
+  <div class="flex flex-col gap-3 border-b border-slate-200 pb-4 dark:border-slate-800">
+    <nav class="flex items-center gap-1 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400"
+         aria-label="Breadcrumb">
+      <a href="{% url 'core:base' %}"
+         class="transition-colors hover:text-slate-900 dark:hover:text-slate-100">Store Central</a>
+      {% icon 'chevron_right' 'text-[14px]' %}
+      <span class="text-emerald-700 dark:text-emerald-400">Help &amp; Support</span>
+    </nav>
+    <div>
+      <h1 class="text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-100 md:text-[28px]">
+        Help &amp; Support
+      </h1>
+      <p class="mt-1 max-w-2xl text-sm text-slate-500 dark:text-slate-400">
+        Quick guides for the register, product search, and store reports.
+      </p>
+    </div>
+    <nav class="flex flex-wrap gap-2 pt-1" aria-label="Help topics">
+      <a href="#register"
+         class="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800">Register</a>
+      <a href="#products"
+         class="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800">Finding products</a>
+      <a href="#reports"
+         class="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800">Reports and receipts</a>
+      <a href="#troubleshooting"
+         class="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800">Troubleshooting</a>
+    </nav>
+  </div>
+
+  <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
+    <section id="register"
+             class="scroll-mt-24 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900 md:p-6">
+      <div class="flex items-center gap-3">
+        <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-400">
+          {% icon 'point_of_sale' 'text-[22px]' %}
+        </span>
+        <h2 class="text-lg font-bold tracking-tight text-slate-900 dark:text-slate-100">Open the register and make a sale</h2>
+      </div>
+      <ol class="mt-4 list-decimal space-y-2 pl-5 text-sm leading-6 text-slate-600 dark:text-slate-300">
+        <li>Open <strong class="font-semibold text-slate-900 dark:text-slate-100">Point of Sale</strong> in the navigation. You can also press <kbd class="rounded border border-slate-300 bg-slate-50 px-1.5 py-0.5 font-mono text-xs font-semibold text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">F2</kbd> from another page.</li>
+        <li>Search for a product, then select its card to add it to the customer cart.</li>
+        <li>Check the cart and quantities. Remove an item or clear the cart if needed.</li>
+        <li>Select <strong class="font-semibold text-slate-900 dark:text-slate-100">Complete Sale</strong> (or <strong class="font-semibold text-slate-900 dark:text-slate-100">Pay</strong> on the compact register view) to record the sale. The completed sale displays its receipt.</li>
+      </ol>
+      <a href="{% if request.user.user_type == 'ADMIN' %}{% url 'core:orders' %}?view=pos{% else %}{% url 'core:base' %}{% endif %}"
+         class="mt-5 inline-flex min-h-10 items-center gap-2 rounded-lg bg-emerald-600 px-3.5 py-2 text-sm font-semibold text-white transition-colors hover:bg-emerald-700 dark:bg-emerald-500 dark:text-slate-950 dark:hover:bg-emerald-400">
+        {% icon 'point_of_sale' 'text-[18px]' %}
+        Open Register
+      </a>
+    </section>
+
+    <section id="products"
+             class="scroll-mt-24 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900 md:p-6">
+      <div class="flex items-center gap-3">
+        <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300">
+          {% icon 'search' 'text-[22px]' %}
+        </span>
+        <h2 class="text-lg font-bold tracking-tight text-slate-900 dark:text-slate-100">Find and add products</h2>
+      </div>
+      <ul class="mt-4 list-disc space-y-2 pl-5 text-sm leading-6 text-slate-600 dark:text-slate-300">
+        <li>Use the register search field to search by product name.</li>
+        <li>Select a product card to add one to the cart. Use the quantity controls to adjust the amount, up to the available stock.</li>
+        <li>If no products match, clear the search to browse the available catalog.</li>
+        <li>Barcode scanners are not integrated; use the on-screen product search.</li>
+      </ul>
+      <p class="mt-4 rounded-xl bg-slate-50 p-3 text-sm leading-6 text-slate-600 dark:bg-slate-950/60 dark:text-slate-300">
+        If a product you need is missing, ask a store administrator to check its availability in the sale catalog.
+      </p>
+    </section>
+
+    <section id="reports"
+             class="scroll-mt-24 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900 md:p-6">
+      <div class="flex items-center gap-3">
+        <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300">
+          {% icon 'bar_chart' 'text-[22px]' %}
+        </span>
+        <h2 class="text-lg font-bold tracking-tight text-slate-900 dark:text-slate-100">Sales reports and receipts</h2>
+      </div>
+      {% if request.user.user_type == 'ADMIN' %}
+        <p class="mt-4 text-sm leading-6 text-slate-600 dark:text-slate-300">
+          Open <strong class="font-semibold text-slate-900 dark:text-slate-100">Sales Reports</strong> to review revenue, costs, and profit for a selected period. Use the page controls to export a CSV or download a PDF report.
+        </p>
+        <p class="mt-3 text-sm leading-6 text-slate-600 dark:text-slate-300">
+          For individual transactions, open <strong class="font-semibold text-slate-900 dark:text-slate-100">Orders</strong> to inspect receipts and download a receipt PDF.
+        </p>
+      {% else %}
+        <p class="mt-4 text-sm leading-6 text-slate-600 dark:text-slate-300">
+          Sales reports and the Orders ledger are available to administrators. Ask a store administrator if you need to review a report or past receipt.
+        </p>
+      {% endif %}
+    </section>
+
+    <section id="troubleshooting"
+             class="scroll-mt-24 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900 md:p-6">
+      <div class="flex items-center gap-3">
+        <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300">
+          {% icon 'info' 'text-[22px]' %}
+        </span>
+        <h2 class="text-lg font-bold tracking-tight text-slate-900 dark:text-slate-100">Troubleshooting</h2>
+      </div>
+      <dl class="mt-4 space-y-4 text-sm leading-6">
+        <div>
+          <dt class="font-semibold text-slate-900 dark:text-slate-100">No products in stock match this search</dt>
+          <dd class="mt-1 text-slate-600 dark:text-slate-300">Clear the search to browse the available catalog. If the item is still missing, ask an administrator to check its availability.</dd>
+        </div>
+        <div>
+          <dt class="font-semibold text-slate-900 dark:text-slate-100">Need to find the register quickly?</dt>
+          <dd class="mt-1 text-slate-600 dark:text-slate-300">Press F2 from another page. On the register, press / to focus product search when you are not already typing in a field.</dd>
+        </div>
+      </dl>
+    </section>
+  </div>
+{% endblock content %}

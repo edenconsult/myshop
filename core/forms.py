@@ -51,7 +51,6 @@ class ProductCreationForm(forms.ModelForm):
             "name",
             "sku",
             "category",
-            "stock",
             "cost",
             "price",
             "low_stock_threshold",
@@ -80,9 +79,6 @@ class ProductCreationForm(forms.ModelForm):
                     "x-model": "cat",
                 }
             ),
-            "stock": forms.NumberInput(
-                attrs={"class": STEPPED, "x-model": "stock"}
-            ),
             "cost": forms.NumberInput(
                 attrs={"class": MONEY, "step": "0.01", "x-model": "cost"}
             ),
@@ -97,10 +93,34 @@ class ProductCreationForm(forms.ModelForm):
             ),
         }
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.instance._state.adding:
+            self.fields["stock"] = forms.IntegerField(
+                min_value=0,
+                required=True,
+                initial=0,
+                widget=forms.NumberInput(
+                    attrs={"class": STEPPED, "x-model": "stock"}
+                ),
+            )
+
     def clean_sku(self):
         """the import matches SKUs case-sensitively, so store one shape."""
         sku = (self.cleaned_data.get("sku") or "").strip().upper()
         return sku or None
+
+    def clean_cost(self):
+        cost = self.cleaned_data["cost"]
+        if cost < 0:
+            raise ValidationError("Acquisition cost cannot be negative.")
+        return cost
+
+    def clean_price(self):
+        price = self.cleaned_data["price"]
+        if price < 0:
+            raise ValidationError("Selling price cannot be negative.")
+        return price
 
     def clean_image(self):
         """Cap the upload, then shrink it: a phone photo is several megabytes

@@ -12,6 +12,11 @@ urlpatterns = [
     path('accounts/', views.accounts, name="accounts"),
     path('accounts/create/', views.account_create, name="account-create"),
     path(
+        'accounts/<uuid:account_id>/update-details/',
+        views.account_update_details,
+        name="account-update-details",
+    ),
+    path(
         'accounts/<uuid:account_id>/reset-password/',
         views.account_reset_password,
         name="account-reset-password",

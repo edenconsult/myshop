@@ -18,7 +18,9 @@ shop history across, 20 minutes for a clean start.
 | Bulk work (importing many products, deleting them) runs in the background | **Memurai** (a Redis server) — https://www.memurai.com. It starts as a Windows service, so you install it once and forget it |
 | The barcode-style icons and the styling are rebuilt from source | **Node.js** — https://nodejs.org. Only needed when the design changes; the ready-made files are already in git |
 
-One more, only if you print PDF receipts: **wkhtmltopdf** (https://wkhtmltopdf.org).
+PDF printing uses **WeasyPrint** by default. To use **wkhtmltopdf** instead, install
+wkhtmltopdf (https://wkhtmltopdf.org) and set `PDF_RENDERER=wkhtmltopdf` in `.env`.
+On Windows, set `WKHTMLTOPDF_PATH` to its executable if it is not on `PATH`.
 
 ## 2. Get the code
 
@@ -56,6 +58,9 @@ COMPANY_LOCATION=your shop location
 COMPANY_PHONE=+233 ...
 COMPANY_EMAIL=
 COMPANY_FOOTER=Goods sold are not returnable. Thank you for your patronage!
+PDF_RENDERER=weasyprint
+# Optional when PDF_RENDERER=wkhtmltopdf and wkhtmltopdf is not on PATH:
+# WKHTMLTOPDF_PATH=C:\Program Files\wkhtmltopdf\bin\wkhtmltopdf.exe
 ```
 
 Without `POSTGRES_PASSWORD` the app fails with a confusing database error, so do this
@@ -143,19 +148,49 @@ Run the shop once by hand to be sure everything is wired up:
 Open http://127.0.0.1:8000 in your browser, log in, scan something. Close it with
 `Ctrl+C` in that window.
 
-Then let the computer do it every time you sign in — no terminal, no window to remember:
+To start both services now, run this from the project folder:
+
+```
+scripts\services\start-both.cmd
+```
+
+The launchers run in the background without visible PowerShell windows; their output and
+errors go to the log files in step 9. To start them automatically each time you sign in,
+choose **one** of these methods:
+
+### Startup-folder shortcut (simplest)
 
 ```
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\services\install-startup.ps1
 ```
 
-That puts one shortcut in your Windows Startup folder. From now on, signing in starts both
-the website and the background worker; if either is already running it quietly stands down
-instead of starting a duplicate. There are also Windows scheduled-task versions of the same
-thing (`scripts\services\register-tasks.ps1`, needs PowerShell *Run as administrator* the
-first time) — you only need one of the two, and the Startup shortcut is the simpler one.
+This installs one shortcut in your Windows Startup folder. Remove it with:
 
-To undo it: the same command with `-Remove` at the end.
+```
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\services\install-startup.ps1 -Remove
+```
+
+### Task Scheduler
+
+Alternatively, register two hidden, per-user scheduled tasks:
+
+```
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\services\register-tasks.ps1
+```
+
+This runs as the current signed-in user and does not require an elevated PowerShell. Remove
+the tasks from PowerShell with:
+
+```
+Unregister-ScheduledTask -TaskName myshop-devserver,myshop-celery-worker -Confirm:$false
+```
+
+Both installers check for `.env` and the project virtual environment before installing. At
+sign-in, the launchers wait up to five minutes for PostgreSQL and Redis to accept connections,
+using the hosts and ports in `.env`; a timeout or missing setup is recorded in `launcher.log`.
+Keep the project folder in its final location before installing. If you move it, remove and
+reinstall the shortcut or scheduled tasks so they point to the new location. Do not install
+both startup methods, since both would try to launch the same services.
 
 ## 9. How to tell it is working
 
@@ -177,8 +212,9 @@ git pull
 ```
 
 If the update mentions icons or styling, also run `npm install` once and then `npm run
-build`. Then restart the two services: close the minimized PowerShell windows, or run the
-Startup shortcut again — the standing-down rule means it will only start what is missing.
+build`. Then sign out of Windows and sign back in to restart the services. If you have not
+installed either automatic startup method, run `scripts\services\start-both.cmd` from the
+project folder instead; it does not start duplicate instances.
 
 ## 11. Keep your shop safe
 
@@ -202,12 +238,12 @@ Also copy the `media\` folder when you add product photos, and keep a spare prin
 | "column ... does not exist" or a page breaks after an update | The tables are behind the code | Run `manage.py migrate` |
 | Icons or colours missing after you change them | The design files were not rebuilt | `npm install` then `npm run build` |
 | Two of something running at once | Started by hand as well as automatically | Harmless — the start-up scripts refuse to stack; but don't run `runserver` twice yourself |
-| Barcode scan does nothing | The register is not open | Press **F2** from anywhere to jump to the register, then scan |
+| Need to find a product for sale | Barcode scanners are not integrated | Open the register and use its product search |
 
 ## 13. Things worth knowing
 
 - `runserver` is the development server. It is fine for one computer at the counter and it
   is what the shop uses today. Do not point the public internet at it.
-- Nothing here needs an administrator prompt except the scheduled-task option in step 8.
+- None of the service setup scripts needs an administrator prompt.
 - If the computer reboots while you are trading, you lose nothing that was already saved —
   but sign back in before the next customer, because the till only comes back after you do.

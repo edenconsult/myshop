@@ -1,8 +1,8 @@
 from django.http import HttpResponse
 from django.template import loader
 import pdfkit
-from django.template import loader
 from weasyprint import HTML, CSS
+from django.core.exceptions import ImproperlyConfigured
 
 import base64
 import json
@@ -118,7 +118,7 @@ def render_attached_pdf(relative_template_path, context, file_name, css=None, pa
         relative_template_path, {**context, "company": settings.COMPANY_INFO}
     )
 
-    stylesheets = []
+    stylesheet_paths = []
     for sheet in (*PRINT_STYLESHEETS, *(css or [])):
         path = _resolve_static(sheet)
         if path is None:
@@ -128,18 +128,48 @@ def render_attached_pdf(relative_template_path, context, file_name, css=None, pa
                 file_name,
             )
             continue
-        stylesheets.append(CSS(filename=str(path)))
+        stylesheet_paths.append(str(path))
 
-    # WeasyPrint cannot size a page to its content, so a caller that prints on
-    # a roll passes the exact sheet it wants; last sheet wins the @page cascade
-    if page_size_mm:
-        stylesheets.append(
-            CSS(string=f"@page {{ size: {page_size_mm[0]}mm {page_size_mm[1]}mm; }}")
+    renderer = getattr(settings, "PDF_RENDERER", "weasyprint").strip().lower()
+    if renderer == "wkhtmltopdf":
+        options = {"enable-local-file-access": None}
+        if page_size_mm:
+            options.update(
+                {
+                    "page-width": f"{page_size_mm[0]}mm",
+                    "page-height": f"{page_size_mm[1]}mm",
+                }
+            )
+        configuration = {}
+        if settings.WKHTMLTOPDF_PATH:
+            configuration["configuration"] = pdfkit.configuration(
+                wkhtmltopdf=settings.WKHTMLTOPDF_PATH
+            )
+        pdf_output = pdfkit.from_string(
+            html,
+            False,
+            css=stylesheet_paths,
+            options=options,
+            **configuration,
         )
-
-    pdf_output = HTML(
-        string=html,
-    ).write_pdf(stylesheets=stylesheets)
+    elif renderer == "weasyprint":
+        stylesheets = [CSS(filename=path) for path in stylesheet_paths]
+        # WeasyPrint cannot size a page to its content, so a caller that prints
+        # on a roll passes the exact sheet it wants; last sheet wins the cascade.
+        if page_size_mm:
+            stylesheets.append(
+                CSS(
+                    string=(
+                        f"@page {{ size: {page_size_mm[0]}mm "
+                        f"{page_size_mm[1]}mm; }}"
+                    )
+                )
+            )
+        pdf_output = HTML(string=html).write_pdf(stylesheets=stylesheets)
+    else:
+        raise ImproperlyConfigured(
+            "PDF_RENDERER must be either 'weasyprint' or 'wkhtmltopdf'."
+        )
 
     response = HttpResponse(
         pdf_output,
@@ -149,22 +179,6 @@ def render_attached_pdf(relative_template_path, context, file_name, css=None, pa
         f'attachment; filename="{file_name}"'
     )
     return response
-
-#
-# def render_attached_pdf(relative_template_path, context, file_name, css=[]):
-#     html = loader.render_to_string(relative_template_path, context)
-#
-#     config = pdfkit.configuration(
-#         wkhtmltopdf=r"C:\Program Files\wkhtmltopdf\bin\wkhtmltopdf.exe"
-#     )
-#     output = pdfkit.from_string(
-#         html, output_path=False, css=css if len(css) > 0 else [],
-#         configuration=config,
-#     )
-#     response = HttpResponse(output)
-#     response["Content-Type"] = "application/pdf"
-#     response["Content-Disposition"] = "attachment; filename=%s" % (file_name)
-#     return response
 
 
 def generate_code(max_length=4):

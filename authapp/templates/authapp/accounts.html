@@ -5,7 +5,7 @@
 
 {% block content %}
   <section class="mx-auto w-full max-w-5xl"
-           x-data="{ createOpen: {{ create_form.errors|yesno:'true,false' }}, resetOpen: '{% if reset_open %}{{ reset_open|escapejs }}{% endif %}', resetPk: '{% if reset_open %}{{ reset_action_pk }}{% endif %}' }">
+           x-data="{ createOpen: {{ create_form.errors|yesno:'true,false' }}, resetOpen: '{% if reset_open %}{{ reset_open|escapejs }}{% endif %}', resetPk: '{% if reset_open %}{{ reset_action_pk }}{% endif %}', editPk: '{% if edit_open_pk %}{{ edit_open_pk }}{% endif %}' }">
     <div class="flex items-end justify-between gap-4">
       <div>
         <h1 class="text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-100">Accounts</h1>
@@ -33,6 +33,13 @@
          class="mt-4 inline-flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-800 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300">
         {% icon 'lock_reset' 'text-[18px]' %}
         <span>New password saved for {{ flash_reset }}.</span>
+      </p>
+    {% endif %}
+    {% if flash_updated %}
+      <p role="status"
+         class="mt-4 inline-flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-800 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300">
+        {% icon 'task_alt' 'text-[18px]' %}
+        <span>Details saved for {{ flash_updated }}.</span>
       </p>
     {% endif %}
 
@@ -67,6 +74,11 @@
               <td class="px-4 py-3">
                 {% if account.pk != request.user.pk %}
                   <div class="flex items-center justify-end gap-1.5 whitespace-nowrap">
+                    <button type="button"
+                            @click="editPk = '{{ account.pk }}'"
+                            class="rounded-lg px-2 py-1 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800/60 dark:hover:text-slate-100">
+                      Edit details
+                    </button>
                     <button type="button"
                             @click="resetOpen = '{{ account.username|escapejs }}'; resetPk = '{{ account.pk }}'"
                             class="rounded-lg px-2 py-1 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800/60 dark:hover:text-slate-100">
@@ -195,5 +207,61 @@
         </form>
       </div>
     </div>
+    {# One dialog per editable row, each with its own form, so a rejected save reopens that row alone #}
+    {% for pk, form in edit_forms %}
+      <div x-show="editPk === '{{ pk }}'"
+           x-cloak
+           class="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-slate-900/60 p-3 backdrop-blur-sm"
+           role="dialog"
+           aria-modal="true"
+           aria-labelledby="edit-details-title-{{ pk }}">
+        <div class="my-auto flex max-h-[92vh] w-full max-w-md flex-col overflow-hidden rounded-xl bg-white shadow-2xl dark:bg-slate-900">
+          <div class="flex items-start justify-between gap-3 border-b border-slate-200 px-5 py-4 dark:border-slate-800">
+            <div class="flex items-start gap-3">
+              <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-400">
+                {% icon 'edit' 'text-[24px]' %}
+              </div>
+              <div class="min-w-0">
+                <h2 class="text-xl font-semibold tracking-tight text-slate-900 dark:text-slate-100" id="edit-details-title-{{ pk }}">Edit details</h2>
+                <p class="mt-0.5 text-xs leading-snug text-slate-500 dark:text-slate-400">For {{ form.instance.username }}. The username and role do not change here.</p>
+              </div>
+            </div>
+            <button type="button" @click="editPk = ''" class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-100">
+              {% icon 'close' 'text-[20px]' %}
+              <span class="sr-only">Close dialog</span>
+            </button>
+          </div>
+          <form method="post"
+                action="{% url 'auth:account-update-details' pk %}"
+                class="flex-1 overflow-y-auto px-5 py-4">
+            {% csrf_token %}
+            <div class="flex flex-col gap-4">
+              {% if form.non_field_errors %}
+                <p class="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-300">{{ form.non_field_errors.0 }}</p>
+              {% endif %}
+              {% for field in form %}
+                <div class="flex flex-col gap-1">
+                  <label class="text-xs font-semibold uppercase tracking-wide text-slate-700 dark:text-slate-200" for="{{ field.id_for_label }}">{{ field.label }}</label>
+                  {{ field }}
+                  {% if field.errors %}<p class="text-[11px] font-medium text-rose-600 dark:text-rose-400">{{ field.errors.0 }}</p>{% endif %}
+                </div>
+              {% endfor %}
+            </div>
+            <div class="mt-5 flex items-center justify-end gap-2 border-t border-slate-200 pt-4 dark:border-slate-800">
+              <button type="button"
+                      @click="editPk = ''"
+                      class="rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 transition-colors hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">
+                Cancel
+              </button>
+              <button type="submit"
+                      class="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-emerald-700 dark:bg-emerald-500 dark:text-slate-950 dark:hover:bg-emerald-400">
+                {% icon 'save' 'text-[18px]' %}
+                <span>Save details</span>
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    {% endfor %}
   </section>
 {% endblock content %}

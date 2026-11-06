@@ -23,10 +23,67 @@
 
   {% include "core/orders/report_kpi_card.html" with kind="revenue" label="Gross Revenue" sub="What the receipts charged" value=report.kpi.revenue money=True delta=report.kpi.revenue_delta_pct note=report.kpi.aov note_suffix="avg per receipt" note_money=True %}
 
-  {% include "core/orders/report_kpi_card.html" with kind="cost" label="Cost Outlay" sub="Catalogue cost of those units" value=report.kpi.cost money=True ratio=report.kpi.cost_share_pct note=report.kpi.profit_multiplier note_suffix="on cost" note_mult=True %}
+  {% include "core/orders/report_kpi_card.html" with kind="cost" label="Cost Outlay" sub="Acquisition cost of those units" value=report.kpi.cost money=True ratio=report.kpi.cost_share_pct note=report.kpi.profit_multiplier note_suffix="on cost" note_mult=True estimated=report.kpi.profit_is_estimated %}
 
-  {% include "core/orders/report_kpi_card.html" with kind="profit" label="Realized Profit" sub="Revenue less cost outlay" value=report.kpi.profit money=True accent=True delta=report.kpi.profit_delta_pct note=report.kpi.margin_pct note_suffix="margin" note_pct=True %}
+  {% include "core/orders/report_kpi_card.html" with kind="profit" label="Realized Profit" sub="Revenue less acquisition cost" value=report.kpi.profit money=True accent=True delta=report.kpi.profit_delta_pct note=report.kpi.margin_pct note_suffix="margin" note_pct=True estimated=report.kpi.profit_is_estimated %}
 </div>
+
+{# ---------- Cost basis: recorded vs estimated ---------- #}
+{% if report.kpi.order_count %}
+<section class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+  <div class="flex flex-col gap-3 border-b border-slate-100 px-4 py-3 dark:border-slate-800 sm:flex-row sm:items-center sm:justify-between">
+    <div class="flex items-center gap-2">
+      {% icon 'info' 'text-[20px] text-emerald-700 dark:text-emerald-400' %}
+      <div>
+        <h2 class="text-sm font-semibold text-slate-900 dark:text-slate-100">Cost Basis</h2>
+        <p class="text-[11px] text-slate-500 dark:text-slate-400">Recorded purchase costs versus estimates frozen at cutover</p>
+      </div>
+    </div>
+    {% if report.kpi.profit_is_estimated %}
+      <span class="inline-flex w-fit items-center gap-1 rounded-md bg-amber-100 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-amber-800 dark:bg-amber-500/10 dark:text-amber-400">
+        {% icon 'warning' 'text-[14px]' %}
+        <span>Partly estimated</span>
+      </span>
+    {% else %}
+      <span class="inline-flex w-fit items-center gap-1 rounded-md bg-emerald-100 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-emerald-800 dark:bg-emerald-500/10 dark:text-emerald-400">
+        {% icon 'check_circle' 'text-[14px]' %}
+        <span>All recorded</span>
+      </span>
+    {% endif %}
+  </div>
+
+  <dl class="grid grid-cols-2 gap-px bg-slate-100 dark:bg-slate-800 lg:grid-cols-4">
+    <div class="bg-white px-4 py-3 dark:bg-slate-900">
+      <dt class="text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Actual cost</dt>
+      <dd class="tnum mt-1 text-lg font-bold text-slate-900 dark:text-slate-100">GH₵ {{ report.kpi.actual_cost|floatformat:2|intcomma }}</dd>
+      <p class="tnum mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">{{ report.kpi.actual_line_count|intcomma }} line{{ report.kpi.actual_line_count|pluralize }}</p>
+    </div>
+    <div class="bg-white px-4 py-3 dark:bg-slate-900">
+      <dt class="text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Estimated cost</dt>
+      <dd class="tnum mt-1 text-lg font-bold {% if report.kpi.estimated_cost %}text-amber-700 dark:text-amber-400{% else %}text-slate-900 dark:text-slate-100{% endif %}">GH₵ {{ report.kpi.estimated_cost|floatformat:2|intcomma }}</dd>
+      <p class="tnum mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">{{ report.kpi.estimated_line_count|intcomma }} line{{ report.kpi.estimated_line_count|pluralize }}</p>
+    </div>
+    <div class="bg-white px-4 py-3 dark:bg-slate-900">
+      <dt class="text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Actual profit</dt>
+      <dd class="tnum mt-1 text-lg font-bold text-emerald-700 dark:text-emerald-400">GH₵ {{ report.kpi.actual_profit|floatformat:2|intcomma }}</dd>
+      <p class="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">From recorded costs</p>
+    </div>
+    <div class="bg-white px-4 py-3 dark:bg-slate-900">
+      <dt class="text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Estimated profit</dt>
+      <dd class="tnum mt-1 text-lg font-bold {% if report.kpi.estimated_profit < 0 %}text-rose-600 dark:text-rose-400{% else %}text-slate-900 dark:text-slate-100{% endif %}">GH₵ {{ report.kpi.estimated_profit|floatformat:2|intcomma }}</dd>
+      <p class="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">From estimated costs</p>
+    </div>
+  </dl>
+
+  <p class="border-t border-slate-100 px-4 py-3 text-[11px] text-slate-500 dark:border-slate-800 dark:text-slate-400">
+    {% if report.kpi.profit_is_estimated %}
+      This window includes {{ report.kpi.estimated_line_count|intcomma }} sale line{{ report.kpi.estimated_line_count|pluralize }} across {{ report.kpi.estimated_order_count|intcomma }} receipt{{ report.kpi.estimated_order_count|pluralize }} whose acquisition cost is an estimate, not a recorded purchase. Combined cost and profit are therefore partly estimated.
+    {% else %}
+      Every sale line in this window carries the cost recorded on its purchase batch.
+    {% endif %}
+  </p>
+</section>
+{% endif %}
 
 {# ---------- Breakdowns ---------- #}
 <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">

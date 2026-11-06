@@ -175,8 +175,20 @@ LOGOUT_REDIRECT_URL = "auth:login"
 CELERY_BROKER_URL = env("CELERY_BROKER_URL", default="redis://127.0.0.1:6379")
 CELERY_RESULT_BACKEND = env("CELERY_RESULT_BACKEND", default="redis://127.0.0.1:6379")
 
+# Cache settings. Index 1 keeps cached values out of the broker's index 0, where
+# a FLUSHALL of the queue would otherwise wipe them.
+CACHES = {
+    "default": {
+        "BACKEND": env("CACHE_BACKEND", default="django.core.cache.backends.redis.RedisCache"),
+        "LOCATION": env("CACHE_LOCATION", default="redis://127.0.0.1:6379/1"),
+    }
+}
+
 # Printed documents (receipts, reports) read their company block from here.
 # Empty email/footer simply drop their line from the printout.
+PDF_RENDERER = env("PDF_RENDERER", default="weasyprint").strip().lower()
+WKHTMLTOPDF_PATH = env("WKHTMLTOPDF_PATH", default="") or None
+
 COMPANY_INFO = {
     "name": env("COMPANY_NAME", default="Noble Cosmetics Ltd."),
     "location": env("COMPANY_LOCATION", default="Atebubu Bayere Bode Junction"),
@@ -184,4 +196,11 @@ COMPANY_INFO = {
     "email": env("COMPANY_EMAIL", default=""),
     "footer": env("COMPANY_FOOTER", default="Goods sold are not returnable. Thank you for your patronage!"),
     "developer": env("COMPANY_DEVELOPER", default="Eden"),
+}
+
+RECEIPT_DEVELOPER_INFO = {
+    "name": env("RECEIPT_DEVELOPER_NAME", default="Eden Creative Systems"),
+    "phone": env("RECEIPT_DEVELOPER_PHONE", default="+233 24 816 0391"),
+    "email": env("RECEIPT_DEVELOPER_EMAIL", default="berkojohnson@gmail.com"),
+    "website": env("RECEIPT_DEVELOPER_WEBSITE", default="ecreativesys.com"),
 }

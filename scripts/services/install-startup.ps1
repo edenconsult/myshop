@@ -22,6 +22,15 @@ if (-not (Test-Path $cmd)) {
     throw "$cmd is missing; restore it from git before installing the shortcut"
 }
 
+$common = Join-Path $PSScriptRoot 'service-common.ps1'
+if (-not (Test-Path -LiteralPath $common -PathType Leaf)) {
+    throw "Missing service helper: $common"
+}
+. $common
+$context = New-MyshopServiceContext
+Assert-MyshopServicePrerequisites -Context $context
+Assert-MyshopServicePrerequisites -Context $context -Worker
+
 $shell = New-Object -ComObject WScript.Shell
 $shortcut = $shell.CreateShortcut($link)
 $shortcut.TargetPath = $cmd
@@ -32,5 +41,5 @@ $shortcut.Save()
 
 "installed: $link"
 "  -> $cmd"
-"logs go to $([IO.Path]::Combine($env:LOCALAPPDATA, 'myshop', 'services', 'logs'))"
+"logs go to $($context.LogDir)"
 "remove it with: powershell -NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Remove"

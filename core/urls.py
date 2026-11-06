@@ -1,10 +1,12 @@
 from django.urls import include, path
-from . import views
+
+from . import batch_views, views
 
 app_name = "core"
 
 urlpatterns = [
     path("", views.index, name="base"),
+    path("help/", views.help_support, name="help"),
     path(
         "products/",
         include(
@@ -54,9 +56,55 @@ urlpatterns = [
                     name="update-product",
                 ),
                 path(
-                    "<uuid:product_id>/restock-product",
-                    views.restock_product,
-                    name="restock-product",
+                    "stock/<uuid:product_id>/adjust/",
+                    batch_views.adjust_stock_question,
+                    name="adjust-stock-question",
+                ),
+                path(
+                    "stock/<uuid:product_id>/batches/",
+                    batch_views.product_batches,
+                    name="product-batches",
+                ),
+                path("receipts/", batch_views.stock_receipts, name="stock-receipts"),
+                path(
+                    "receipts/receive/",
+                    batch_views.receive_stock_question,
+                    name="receive-stock-question",
+                ),
+                path(
+                    "receipts/receive/selected/",
+                    batch_views.receive_selected_stock_question,
+                    name="receive-selected-stock-question",
+                ),
+                path(
+                    "receipts/receive/group/",
+                    batch_views.receipt_supplier_group_blank,
+                    name="receipt-supplier-group-blank",
+                ),
+                path(
+                    "receipts/receive/line/",
+                    batch_views.receipt_line_blank,
+                    name="receipt-line-blank",
+                ),
+                path(
+                    "receipts/drafts/save/",
+                    batch_views.save_receipt_draft,
+                    name="save-receipt-draft",
+                ),
+                path(
+                    "receipts/drafts/<uuid:draft_id>/delete/",
+                    batch_views.delete_receipt_draft,
+                    name="delete-receipt-draft",
+                ),
+                path(
+                    "receipts/product-search/",
+                    batch_views.receipt_product_options,
+                    name="receipt-product-options",
+                ),
+                path(
+                    "receipts/<uuid:receipt_id>/",
+                    batch_views.stock_receipt_detail,
+                    name="stock-receipt-detail",
                 ),
                 path(
                     "<uuid:product_id>/remove-product",

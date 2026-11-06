@@ -67,15 +67,30 @@
       <div class="foot">{{ company.footer }}</div>
     {% endif %}
 
-    <div class="colophon">
-      {% if logo_data_uri %}
-        <img class="logo" src="{{ logo_data_uri }}" alt="">
-      {% endif %}
-      <div>Tel: {{ company.phone }}</div>
-      {% if company.email %}
-        <div>Email: {{ company.email }}</div>
-      {% endif %}
-      <div class="dev">Developed by: {{ company.developer }}</div>
-    </div>
+    <footer class="colophon">
+      <table class="brand-footer">
+        <tbody>
+          <tr>
+            {% if logo_data_uri %}
+              <td class="logo-cell">
+                <img class="logo" src="{{ logo_data_uri }}" alt="">
+              </td>
+            {% endif %}
+            <td class="developer-info">
+              <div class="brand-name">{{ developer.name }}</div>
+              {% if developer.phone %}
+                <div>Tel: {{ developer.phone }}</div>
+              {% endif %}
+              {% if developer.email %}
+                <div>Email: {{ developer.email }}</div>
+              {% endif %}
+              {% if developer.website %}
+                <div>Web: {{ developer.website }}</div>
+              {% endif %}
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </footer>
   </body>
 </html>
